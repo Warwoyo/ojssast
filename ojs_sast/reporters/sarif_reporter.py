@@ -1,126 +1,185 @@
-"""SARIF 2.1.0 report writer (GitHub Advanced Security compatible)."""
+"""SARIF 2.1.0 report generator for OJS-SAST.
 
-from __future__ import annotations
+Generates reports compatible with GitHub Code Scanning and VS Code SARIF Viewer.
+"""
 
 import json
-import re
-from pathlib import Path
-from typing import Any, Dict, List
+import os
 
-from .. import __version__
-from ..models import SARIF_LEVEL, ScanResult, Severity, sort_findings
+from ojs_sast.constants import __version__
+from ojs_sast.models.finding import Finding
+from ojs_sast.models.report import ScanReport
+from ojs_sast.utils.logger import logger
 
-_SECURITY_SEVERITY = {
-    Severity.CRITICAL: "9.5",
-    Severity.HIGH: "8.0",
-    Severity.MEDIUM: "5.5",
-    Severity.LOW: "3.0",
-    Severity.INFO: "1.0",
-}
-
-INFO_URI = "https://github.com/ojs-sast/ojs-sast"
+SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
+SARIF_VERSION = "2.1.0"
 
 
-def _cwe_help_uri(cwe: str) -> str:
-    num = cwe.upper().replace("CWE-", "").strip()
-    if num.isdigit():
-        return f"https://cwe.mitre.org/data/definitions/{num}.html"
-    return INFO_URI
+def generate_sarif_report(report: ScanReport, output_dir: str) -> str:
+    """Generate a SARIF 2.1.0 report.
 
+    Args:
+        report: The scan report data.
+        output_dir: Directory to write the report to.
 
-def _build_rules(findings) -> List[Dict[str, Any]]:
-    rules: Dict[str, Dict[str, Any]] = {}
-    for f in findings:
-        if f.rule_id in rules:
-            continue
-        tags = ["security"]
-        if f.cwe:
-            tags.append(f"external/cwe/{f.cwe.lower()}")
-        if f.owasp:
-            tags.append(f"owasp/{f.owasp}")
-        props: Dict[str, Any] = {
-            "security-severity": (str(f.cvss_score) if f.cvss_score is not None
-                                  else _SECURITY_SEVERITY[f.severity]),
-            "tags": tags,
-            "module": f.module,
-        }
-        if f.cwe:
-            props["cwe"] = f.cwe
-        if f.cve_references:
-            props["cve"] = list(f.cve_references)
-        rule_entry = {
-            "id": f.rule_id,
-            "name": "".join(w.capitalize() for w in re.split(r"[^A-Za-z0-9]+", f.title)) or f.rule_id,
-            "shortDescription": {"text": f.title or f.rule_id},
-            "fullDescription": {"text": (f.detail or f.title or f.rule_id)[:1000]},
-            "helpUri": _cwe_help_uri(f.cwe) if f.cwe else INFO_URI,
-            "help": {"text": f.remediation or "See description."},
-            "defaultConfiguration": {"level": SARIF_LEVEL[f.severity]},
-            "properties": props,
-        }
-        rules[f.rule_id] = rule_entry
-    return list(rules.values())
+    Returns:
+        Path to the generated report file.
+    """
+    filepath = os.path.join(output_dir, "report.sarif")
 
+    # Collect unique rules used in findings
+    rules_map: dict[str, dict] = {}
+    for finding in report.findings:
+        if finding.rule_id not in rules_map:
+            rules_map[finding.rule_id] = _build_rule(finding)
 
-def _build_result(f) -> Dict[str, Any]:
-    location: Dict[str, Any] = {
-        "physicalLocation": {
-            "artifactLocation": {"uri": f.file_path},
-        }
-    }
-    if f.line is not None and f.line >= 1:
-        region: Dict[str, Any] = {"startLine": f.line}
-        if f.column is not None and f.column >= 1:
-            region["startColumn"] = f.column
-        if f.code_snippet:
-            region["snippet"] = {"text": f.code_snippet}
-        location["physicalLocation"]["region"] = region
-
-    props: Dict[str, Any] = {"severity": f.severity.value, "confidence": f.confidence}
-    if f.cwe:
-        props["cwe"] = f.cwe
-    if f.layer:
-        props["layer"] = f.layer
-    if f.taint_source:
-        props["taint_source"] = f.taint_source
-    if f.actual_mime:
-        props["actual_mime"] = f.actual_mime
-
-    return {
-        "ruleId": f.rule_id,
-        "level": SARIF_LEVEL[f.severity],
-        "message": {"text": f.detail or f.title or f.rule_id},
-        "locations": [location],
-        "partialFingerprints": {"ojsSastFindingId": f.finding_id},
-        "properties": props,
-    }
-
-
-def render_sarif(result: ScanResult) -> str:
-    findings = sort_findings(result.findings)
     sarif = {
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-        "version": "2.1.0",
+        "$schema": SARIF_SCHEMA,
+        "version": SARIF_VERSION,
         "runs": [
             {
                 "tool": {
                     "driver": {
-                        "name": "ojs-sast",
+                        "name": "OJS-SAST",
                         "version": __version__,
-                        "informationUri": INFO_URI,
-                        "rules": _build_rules(findings),
+                        "informationUri": "https://github.com/ojs-sast/ojs-sast",
+                        "rules": list(rules_map.values()),
                     }
                 },
-                "results": [_build_result(f) for f in findings],
+                "results": [_build_result(f) for f in report.findings],
+                "invocations": [
+                    {
+                        "executionSuccessful": True,
+                        "startTimeUtc": report.timestamp,
+                    }
+                ],
             }
         ],
     }
-    return json.dumps(sarif, indent=2, ensure_ascii=False)
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(sarif, f, indent=2, ensure_ascii=False)
+        logger.info(f"SARIF report generated: {filepath}")
+    except OSError as e:
+        logger.error(f"Failed to write SARIF report: {e}")
+
+    return filepath
 
 
-def write_sarif_report(result: ScanResult, output_dir: Path, filename: str = "findings.sarif") -> Path:
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / filename
-    path.write_text(render_sarif(result), encoding="utf-8")
-    return path
+def _build_rule(finding: Finding) -> dict:
+    """Build a SARIF rule descriptor from a finding."""
+    rule: dict = {
+        "id": finding.rule_id,
+        "name": finding.name,
+        "shortDescription": {"text": finding.name},
+        "fullDescription": {"text": finding.description},
+        "defaultConfiguration": {
+            "level": _severity_to_level(finding.severity.value),
+        },
+        "helpUri": finding.references[0] if finding.references else "",
+    }
+
+    rule["properties"] = {
+        "tags": [finding.category.value, finding.subcategory],
+    }
+    
+    if finding.cwe:
+        rule["properties"]["tags"].append(finding.cwe)
+    if finding.owasp:
+        rule["properties"]["tags"].append(finding.owasp)
+
+    return rule
+
+
+def _build_result(finding: Finding) -> dict:
+    """Build a SARIF result from a finding."""
+    result: dict = {
+        "ruleId": finding.rule_id,
+        "level": _severity_to_level(finding.severity.value),
+        "message": {"text": finding.description},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {
+                        "uri": finding.file_path,
+                    },
+                    "region": {
+                        "startLine": max(1, finding.line_start),
+                        "endLine": max(1, finding.line_end),
+                    },
+                }
+            }
+        ],
+    }
+
+    # Add code snippet
+    if finding.code_snippet:
+        result["locations"][0]["physicalLocation"]["region"]["snippet"] = {
+            "text": finding.code_snippet,
+        }
+
+    # Add taint path as code flow
+    if finding.taint_path:
+        tp = finding.taint_path
+        result["codeFlows"] = [
+            {
+                "threadFlows": [
+                    {
+                        "locations": [
+                            {
+                                "location": {
+                                    "message": {"text": f"Source: {tp.source}"},
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": tp.source_location.rsplit(":", 1)[0]},
+                                        "region": {"startLine": int(tp.source_location.rsplit(":", 1)[1]) if ":" in tp.source_location else 1},
+                                    },
+                                }
+                            },
+                            *[
+                                {
+                                    "location": {
+                                        "message": {"text": step},
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": finding.file_path},
+                                        },
+                                    }
+                                }
+                                for step in tp.intermediate_steps
+                            ],
+                            {
+                                "location": {
+                                    "message": {"text": f"Sink: {tp.sink}"},
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": tp.sink_location.rsplit(":", 1)[0]},
+                                        "region": {"startLine": int(tp.sink_location.rsplit(":", 1)[1]) if ":" in tp.sink_location else 1},
+                                    },
+                                }
+                            },
+                        ]
+                    }
+                ]
+            }
+        ]
+
+    # Add fix/remediation
+    if finding.remediation:
+        result["fixes"] = [
+            {
+                "description": {"text": finding.remediation},
+            }
+        ]
+
+    return result
+
+
+def _severity_to_level(severity: str) -> str:
+    """Map OJS-SAST severity to SARIF level."""
+    mapping = {
+        "CRITICAL": "error",
+        "HIGH": "error",
+        "MEDIUM": "warning",
+        "LOW": "note",
+        "INFO": "note",
+    }
+    return mapping.get(severity, "warning")

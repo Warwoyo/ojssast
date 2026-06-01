@@ -20,7 +20,9 @@ from .detectors.config_scanner import (ConfigScanner, extract_upload_dirs,
 from .detectors.source_scanner import SourceScanner
 from .detectors.upload_scanner import UploadScanner
 from .models import Finding, ScanResult, Severity, sort_findings
-from .reporters import write_html_report, write_json_report, write_sarif_report
+from .models.report import ScanReport
+from .reporters import (generate_html_report, generate_json_report,
+                        generate_sarif_report)
 from .ruleset.loader import Ruleset, load_ruleset
 
 logger = logging.getLogger("ojs_sast.orchestrator")
@@ -273,10 +275,14 @@ class Orchestrator:
         formats = set(self.formats)
         # JSON is always produced (per spec).
         formats.add("json")
+        # The reporters write directly into output_dir but do not create it.
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        report = ScanReport.from_scan_result(result)
+        out_dir = str(self.output_dir)
         if "json" in formats:
-            written["json"] = write_json_report(result, self.output_dir)
+            written["json"] = Path(generate_json_report(report, out_dir))
         if "html" in formats:
-            written["html"] = write_html_report(result, self.output_dir)
+            written["html"] = Path(generate_html_report(report, out_dir))
         if "sarif" in formats:
-            written["sarif"] = write_sarif_report(result, self.output_dir)
+            written["sarif"] = Path(generate_sarif_report(report, out_dir))
         return written
