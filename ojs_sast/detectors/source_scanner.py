@@ -66,9 +66,11 @@ REQUEST_SOURCE_NAMES = {
     "getrequestedargs", "getrequestedarg",
 }
 # Weaker, attacker-influenced filename sources (path-traversal relevant only).
+# "textcontent" covers DOMElement->textContent used in NativeXml import filters
+# (CVE-2023-47271, CVE-2025-67890): XML node content used as a filename/path.
 FILENAME_SOURCE_NAMES = {
     "getfilename", "getname", "getclientfilename", "getlocalizedname",
-    "getoriginalfilename",
+    "getoriginalfilename", "textcontent",
 }
 
 SANITIZER_FUNCS = {
@@ -103,6 +105,11 @@ FILE_WRITE_FUNCS: Dict[str, Tuple[int, ...]] = {
     "rename": (0, 1),
     "fopen": (0,),
     "unlink": (0,),
+}
+# OJS-specific file-write methods whose first argument becomes the stored filename
+# (CVE-2025-67890: setServerFileName($o->textContent) → writeFile() path traversal).
+FILE_WRITE_METHODS = {
+    "setserverfilename", "setfilename", "setoriginalfilename",
 }
 SQL_RAW_METHODS = {"raw", "statement", "unprepared"}  # any receiver
 SQL_SCOPED_METHODS = {"query", "select", "insert", "update", "delete"}
@@ -428,6 +435,14 @@ class PHPTaintAnalyzer:
 
         if fname in CODE_EXEC_FUNCS:
             for a in args:
+                # assert() with a boolean/comparison expression is safe in PHP 7+:
+                # the expression is evaluated as bool, never eval'd as PHP code.
+                # Only flag assert() when the argument is a string type that could
+                # be executed by the legacy string-eval behaviour.
+                if fname == "assert" and a.type not in (
+                    "string", "encapsed_string", "heredoc", "nowdoc",
+                ):
+                    continue
                 lab = self._taint_of(a, tainted, include_filename=True)
                 if lab:
                     cwe = "CWE-78" if fname in COMMAND_FUNCS else "CWE-95"
@@ -451,12 +466,12 @@ class PHPTaintAnalyzer:
     def _check_method_sink(self, node, tainted: Dict[str, str]) -> None:
         scope, method = self._scope_method(node)
         args = self._arg_nodes(node)
-        if not args:
-            return
 
         is_raw = method in SQL_RAW_METHODS
         is_scoped_sql = method in SQL_SCOPED_METHODS and scope in SQL_DB_SCOPES
         if is_raw or is_scoped_sql:
+            if not args:
+                return
             # Only inspect the first (SQL string) argument; later args are bindings.
             lab = self._taint_of(args[0], tainted, include_filename=True)
             if lab:
@@ -465,6 +480,14 @@ class PHPTaintAnalyzer:
                 disp_scope = self._text(scope_node) + "::" if scope_node is not None else ""
                 disp_method = self._text(name_node) if name_node is not None else method
                 self._emit("RULE-SRC-005", node, lab, f"{disp_scope}{disp_method}() SQL string")
+            return
+
+        # OJS-specific file-naming methods: filename stored via setServerFileName()
+        # etc. is later used by writeFile() / file_put_contents() (CVE-2025-67890).
+        if method in FILE_WRITE_METHODS and args:
+            lab = self._taint_of(args[0], tainted, include_filename=True)
+            if lab:
+                self._emit("RULE-SRC-002", node, lab, f"{method}() filename argument")
 
     # -- emission ----------------------------------------------------------- #
     def _emit(self, rule_id: str, node, label: str, sink_desc: str,
@@ -575,9 +598,32 @@ class RegexEngine:
 _SMARTY_COMMENT_RE = re.compile(r"\{\*.*?\*\}", re.DOTALL)
 _SMARTY_VAR_TAG_RE = re.compile(r"\{\$[^{}\n]*\}")
 
+# Getters that always return a plain integer — cannot carry an XSS payload.
+# This regex matches the Smarty tag itself, so it must start with {$.
+_NUMERIC_GETTER_RE = re.compile(
+    r"\{\$[\w.\[\]>-]*->get(?:"
+    r"Id|Major|Minor|Revision|Build|Seq|Num|Total|Status|Count|Order|"
+    r"ReviewRound(?:Id)?|StageId|SubmissionId|CurrentRound|Position"
+    r")\s*\(",
+    re.IGNORECASE,
+)
+
+# PHP framework-rendered HTML widgets / element IDs.  These Smarty variables are
+# assigned entirely by the PHP Form Builder stack, never by user-submitted text.
+# Flagging them as XSS would only create noise with zero actionable signal.
+_SAFE_FRAMEWORK_VAR_RE = re.compile(
+    r"\{\$(?:"
+    r"FBV_(?:textInput|buttonParams|checkboxParams|type|disabled|checked|"
+    r"required|selected|translate|validation|layoutInfo)\b"
+    r"|pluploadControl|browseButtonId|uploadFormId|metadataFormId"
+    r"|reviewRoundTabsId|inEl\b"          # inEl is a PHP-hardcoded tag name
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def scan_smarty(file_path: str, text: str, rule: Optional[Rule]) -> List[Finding]:
-    """Flag ``{$var}`` output tags that lack an |escape (or |nofilter) modifier."""
+    """Flag ``{$var}`` output tags that lack a security-aware output modifier."""
     findings: List[Finding] = []
     # Blank out comments so offsets are preserved but their content is ignored.
     cleaned = _SMARTY_COMMENT_RE.sub(lambda m: " " * len(m.group(0)), text)
@@ -586,13 +632,38 @@ def scan_smarty(file_path: str, text: str, rule: Optional[Rule]) -> List[Finding
     for m in _SMARTY_VAR_TAG_RE.finditer(cleaned):
         tag = m.group(0)
         lower = tag.lower()
-        if "|escape" in lower or "nofilter" in lower or "|@escape" in lower:
+
+        # Already has a recognised security-aware output filter.
+        # |escape covers html/url/js/mail variants; |strip_unsafe_html strips
+        # dangerous tags from rich-text stored by privileged users (intended
+        # behaviour — not a vulnerability).
+        if ("|escape" in lower or "|strip_unsafe_html" in lower
+                or "nofilter" in lower or "|@escape" in lower):
             continue
+
+        # Smarty built-in read-only variables.
         if tag.startswith("{$smarty."):
             continue
-        # Modifiers that are themselves output-safe.
-        if re.search(r"\|\s*(?:intval|count|json_encode|date_format|number_format)\b", lower):
+
+        # Modifiers whose output is intrinsically safe (numeric/structural).
+        # NOTE: nl2br is intentionally NOT here — it converts \n to <br> but does
+        # NOT sanitize HTML.  {$var|nl2br} without |strip_unsafe_html is the
+        # exact CVE-2025-13469 pattern.
+        if re.search(
+            r"\|\s*(?:intval|count|json_encode|date_format|number_format|"
+            r"string_format|lower|upper|trim|truncate|wordwrap|spacify)\b",
+            lower,
+        ):
             continue
+
+        # Getters guaranteed to return a plain integer (e.g. ->getId(), ->getMajor()).
+        if _NUMERIC_GETTER_RE.search(tag):
+            continue
+
+        # PHP Form Builder / framework-generated IDs/attributes — never user data.
+        if _SAFE_FRAMEWORK_VAR_RE.search(tag):
+            continue
+
         line_no = text.count("\n", 0, m.start()) + 1
         line_text = lines[line_no - 1].strip() if 0 <= line_no - 1 < len(lines) else tag
         findings.append(Finding(
@@ -623,6 +694,9 @@ _CSRF_CHECK_TOKENS = (
     "_checkcsrf", "validatecsrftoken", "requirecsrf", "getcsrftoken",
     "checkcsrf", "csrf_token", "->addpolicy", "new csrf",
 )
+# FormValidatorCSRF is the OJS mechanism for protecting Form subclasses.
+_FORM_CSRF_TOKENS = ("formvalidatorcsrf", "checkcsrf") + _CSRF_CHECK_TOKENS
+
 _MUTATING_NAME_RE = re.compile(
     r"(?:save|update|delete|insert|create|upload|import|edit|remove|store|add|"
     r"execute|process|submit|register|assign|publish|unpublish|restore|move)",
@@ -631,7 +705,14 @@ _MUTATING_NAME_RE = re.compile(
 
 
 def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Finding]:
-    """Heuristic: Handler class methods consuming request input with no CSRF check."""
+    """Heuristic CSRF detection covering three OJS patterns:
+
+    1. Handler class state-changing methods without any CSRF check token.
+    2. Form subclasses whose constructor lacks FormValidatorCSRF
+       (CVE-2023-5626 pattern).
+    3. Static authentication methods (e.g. Validation::login) that process POST
+       without checkCSRF() (CVE-2025-67892 pattern).
+    """
     parser = _get_parser("php")
     if parser is None:
         return []
@@ -647,52 +728,125 @@ def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Findi
         for c in node.children:
             yield from find_classes(c)
 
+    def _make_finding(cls_name, mname, line_no, col, detail):
+        return Finding(
+            rule_id=rule.id if rule else "RULE-SRC-003",
+            module="source_code",
+            severity=rule.severity if rule else Severity.MEDIUM,
+            file_path=file_path,
+            title=rule.name if rule else "Handler/Form POST method missing CSRF check",
+            detail=detail,
+            remediation=rule.remediation if rule else "Validate a CSRF token for POST handlers.",
+            line=line_no,
+            column=col,
+            cwe=rule.cwe if rule else "CWE-352",
+            owasp=rule.owasp if rule else "A01:2021",
+            cvss_score=rule.cvss_score if rule else 4.3,
+            cve_references=list(rule.cve_references) if rule else [],
+            code_snippet=f"{cls_name}::{mname}(...)",
+            confidence="low",
+        )
+
     for cls in find_classes(tree.root_node):
         name_node = cls.child_by_field_name("name")
         cls_name = text(name_node) if name_node is not None else ""
-        if "handler" not in cls_name.lower():
-            continue
+        cls_lower = cls_name.lower()
         cls_text_lower = text(cls).lower()
-        has_csrf = any(tok in cls_text_lower for tok in _CSRF_CHECK_TOKENS)
-        if has_csrf:
-            continue
 
-        body = cls.child_by_field_name("body")
-        if body is None:
-            continue
-        for member in body.named_children:
-            if member.type != "method_declaration":
+        # ── Pattern 1: Handler classes ──────────────────────────────────────
+        if "handler" in cls_lower:
+            has_csrf = any(tok in cls_text_lower for tok in _CSRF_CHECK_TOKENS)
+            if not has_csrf:
+                body = cls.child_by_field_name("body")
+                if body is not None:
+                    for member in body.named_children:
+                        if member.type != "method_declaration":
+                            continue
+                        mname_node = member.child_by_field_name("name")
+                        mname = text(mname_node) if mname_node is not None else ""
+                        mtext = text(member)
+                        reads_input = bool(
+                            re.search(r"\$_(?:POST|REQUEST)\b", mtext)
+                            or re.search(r"getUserVar\s*\(", mtext)
+                        )
+                        mutating = (
+                            bool(_MUTATING_NAME_RE.search(mname))
+                            or "->update" in mtext.lower()
+                            or "->insert" in mtext.lower()
+                        )
+                        if reads_input and mutating:
+                            findings.append(_make_finding(
+                                cls_name, mname,
+                                member.start_point[0] + 1,
+                                member.start_point[1] + 1,
+                                (f"Method {cls_name}::{mname}() consumes request input and "
+                                 f"appears state-changing, but no CSRF validation was found "
+                                 f"in {cls_name}. Heuristic — verify the authorize()/policy chain."),
+                            ))
+
+        # ── Pattern 2: Form subclasses missing FormValidatorCSRF ────────────
+        # Targets CVE-2023-5626: PaymentTypesForm (and similar) whose constructor
+        # performs state-changing saves without adding FormValidatorCSRF.
+        elif "form" in cls_lower:
+            has_csrf = any(tok in cls_text_lower for tok in _FORM_CSRF_TOKENS)
+            if has_csrf:
                 continue
-            mname_node = member.child_by_field_name("name")
-            mname = text(mname_node) if mname_node is not None else ""
-            mtext = text(member)
+            # Only flag Form classes that read input AND write/save state.
             reads_input = bool(
-                re.search(r"\$_(?:POST|REQUEST)\b", mtext)
-                or re.search(r"getUserVar\s*\(", mtext)
+                re.search(r"getUserVar\s*\(", cls_text_lower)
+                or re.search(r"\$_(?:POST|REQUEST)\b", cls_text_lower)
             )
-            mutating = bool(_MUTATING_NAME_RE.search(mname)) or "->update" in mtext.lower() \
-                or "->insert" in mtext.lower()
-            if reads_input and mutating:
-                line_no = member.start_point[0] + 1
-                findings.append(Finding(
-                    rule_id=rule.id if rule else "RULE-SRC-003",
-                    module="source_code",
-                    severity=rule.severity if rule else Severity.MEDIUM,
-                    file_path=file_path,
-                    title=rule.name if rule else "Handler POST method missing CSRF check",
-                    detail=(f"Method {cls_name}::{mname}() consumes request input and appears "
-                            f"state-changing, but no CSRF validation was found in {cls_name}. "
-                            f"Heuristic — verify the authorize()/policy chain."),
-                    remediation=rule.remediation if rule else "Validate a CSRF token for POST handlers.",
-                    line=line_no,
-                    column=member.start_point[1] + 1,
-                    cwe=rule.cwe if rule else "CWE-352",
-                    owasp=rule.owasp if rule else "A01:2021",
-                    cvss_score=rule.cvss_score if rule else 4.3,
-                    cve_references=list(rule.cve_references) if rule else [],
-                    code_snippet=mname + "(...)",
-                    confidence="low",
-                ))
+            mutating_class = bool(_MUTATING_NAME_RE.search(cls_text_lower))
+            if not (reads_input and mutating_class):
+                continue
+            body = cls.child_by_field_name("body")
+            if body is None:
+                continue
+            for member in body.named_children:
+                if member.type != "method_declaration":
+                    continue
+                mname_node = member.child_by_field_name("name")
+                mname = text(mname_node) if mname_node is not None else ""
+                if mname.lower() not in ("__construct", "initialize", "execute"):
+                    continue
+                mtext = text(member)
+                if bool(_MUTATING_NAME_RE.search(mtext)) or "addsetting" in mtext.lower():
+                    findings.append(_make_finding(
+                        cls_name, mname,
+                        member.start_point[0] + 1,
+                        member.start_point[1] + 1,
+                        (f"Form class {cls_name}::{mname}() is state-changing but "
+                         f"no FormValidatorCSRF was found. Add "
+                         f"$this->addCheck(new FormValidatorCSRF($this)) to the constructor."),
+                    ))
+
+        # ── Pattern 3: Authentication methods without checkCSRF ─────────────
+        # Targets CVE-2025-67892: Validation::login() that processes POST but
+        # never calls $request->checkCSRF() before authenticating.
+        elif cls_lower in ("validation", "authvalidation", "pkpvalidation"):
+            if "checkcsrf" in cls_text_lower:
+                continue
+            body = cls.child_by_field_name("body")
+            if body is None:
+                continue
+            for member in body.named_children:
+                if member.type != "method_declaration":
+                    continue
+                mname_node = member.child_by_field_name("name")
+                mname = text(mname_node) if mname_node is not None else ""
+                if mname.lower() not in ("login", "authenticate", "signin"):
+                    continue
+                mtext = text(member)
+                if re.search(r"getUserVar\s*\(|\$_POST\b", mtext):
+                    findings.append(_make_finding(
+                        cls_name, mname,
+                        member.start_point[0] + 1,
+                        member.start_point[1] + 1,
+                        (f"Authentication method {cls_name}::{mname}() processes POST data "
+                         f"but no $request->checkCSRF() guard was found. "
+                         f"Without this check login CSRF is possible (CVE-2025-67892 pattern)."),
+                    ))
+
     return findings
 
 

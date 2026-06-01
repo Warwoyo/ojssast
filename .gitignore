@@ -29,3 +29,4 @@ ojs_sast_report/
 .vscode/
 *.swp
 .DS_Store
+dataset/*
