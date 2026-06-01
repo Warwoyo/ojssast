@@ -17,7 +17,7 @@ def generate_json_report(report: ScanReport, output_dir: str) -> str:
     Returns:
         Path to the generated report file.
     """
-    filepath = os.path.join(output_dir, "report.json")
+    filepath = os.path.join(output_dir, "findings.json")
 
     report_data = report.to_dict()
 

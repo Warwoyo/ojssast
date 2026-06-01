@@ -275,10 +275,16 @@ class Orchestrator:
         formats = set(self.formats)
         # JSON is always produced (per spec).
         formats.add("json")
-        # The reporters write directly into output_dir but do not create it.
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        ojs_version = result.metadata.get("ojs_version", "unknown")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        subfolder_name = f"{timestamp}_{ojs_version}"
+        target_dir = self.output_dir / subfolder_name
+        
+        # The reporters write directly into target_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
         report = ScanReport.from_scan_result(result)
-        out_dir = str(self.output_dir)
+        out_dir = str(target_dir)
         if "json" in formats:
             written["json"] = Path(generate_json_report(report, out_dir))
         if "html" in formats:
