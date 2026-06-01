@@ -1,0 +1,187 @@
+# Upload-directory rules for ojs-sast.
+#
+# All upload rules are pattern_type: builtin and are executed by the layered
+# upload scanner (1: dangerous extension, 2: double extension, 3: MIME mismatch,
+# 4: webshell signatures, 5: malicious PDF). Lists/signatures live in `params`.
+
+rules:
+  - id: RULE-UPLOAD-001
+    name: "Dangerous file extension in upload directory"
+    module: upload_directory
+    cwe: CWE-434
+    owasp: "A05:2021"
+    severity: CRITICAL
+    pattern_type: builtin
+    params:
+      layer: dangerous_extension
+      # Severity per group; .php* variants are CRITICAL, the rest HIGH.
+      php_extensions:
+        [".php", ".php3", ".php4", ".php5", ".php7", ".php8", ".phtml",
+         ".phar", ".phps", ".php-s", ".shtml", ".shtm", ".pht"]
+      server_extensions:
+        [".asp", ".aspx", ".cfm", ".cgi", ".pl", ".py", ".rb", ".sh",
+         ".bash", ".zsh", ".ps1", ".bat", ".cmd", ".vbs", ".wsf"]
+      executable_extensions: [".exe", ".dll", ".so", ".elf", ".bin", ".msi", ".com"]
+      java_extensions: [".jsp", ".jspx", ".war", ".jar"]
+    description: >-
+      A file whose extension can be executed server-side (or is a native
+      executable) was found in an OJS upload directory. Uploads must be inert
+      data; an executable here is a strong indicator of compromise or a webshell.
+    remediation: >-
+      Remove the file immediately and investigate for compromise. Restrict
+      uploads to an allow-list of safe types and block script execution in
+      upload paths at the web-server layer.
+
+  - id: RULE-UPLOAD-002
+    name: "Double extension masquerade in upload directory"
+    module: upload_directory
+    cwe: CWE-434
+    owasp: "A05:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      layer: double_extension
+      # A "media" first extension followed by an executable second extension
+      # (e.g. shell.php.jpg, image.jpg.php). Media extensions used as decoys:
+      media_extensions:
+        [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".pdf",
+         ".doc", ".docx", ".xls", ".xlsx", ".txt", ".csv", ".zip", ".tar", ".gz"]
+    description: >-
+      The filename contains multiple extensions where an intermediate component
+      is an executable type (e.g. shell.php.jpg). On misconfigured servers the
+      executable extension wins, allowing the "image" to run as code.
+    remediation: >-
+      Remove the file and investigate. Normalize uploaded filenames to a single
+      safe extension and validate content type server-side.
+
+  - id: RULE-UPLOAD-003
+    name: "MIME type does not match file extension"
+    module: upload_directory
+    cwe: CWE-434
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      layer: mime_mismatch
+      # PHP/executable MIME types treated as critical when the extension lies.
+      php_mimes: ["text/x-php", "application/x-php", "application/x-httpd-php"]
+      executable_mimes:
+        ["application/x-executable", "application/x-dosexec",
+         "application/x-elf", "application/x-sharedlib", "application/x-mach-binary"]
+      # Expected MIME prefixes per declared (benign) extension.
+      expected_mime:
+        ".jpg": ["image/jpeg"]
+        ".jpeg": ["image/jpeg"]
+        ".png": ["image/png"]
+        ".gif": ["image/gif"]
+        ".bmp": ["image/"]
+        ".webp": ["image/webp"]
+        ".svg": ["image/svg", "text/xml", "text/plain", "application/xml"]
+        ".pdf": ["application/pdf"]
+        ".txt": ["text/plain", "text/"]
+        ".csv": ["text/", "application/csv"]
+        ".doc": ["application/msword", "application/x-ole", "application/octet-stream"]
+        ".docx": ["application/vnd.openxmlformats", "application/zip"]
+        ".xls": ["application/vnd.ms-excel", "application/x-ole", "application/octet-stream"]
+        ".xlsx": ["application/vnd.openxmlformats", "application/zip"]
+        ".zip": ["application/zip", "application/x-zip"]
+    description: >-
+      python-magic detected a content type that contradicts the file's
+      extension (for example, a .jpg whose real content is PHP source). This is a
+      classic upload-filter bypass.
+    remediation: >-
+      Quarantine the file. Enforce content-based type validation on upload and
+      reject files whose magic bytes disagree with the declared extension.
+
+  - id: RULE-UPLOAD-004
+    name: "Webshell signature detected"
+    module: upload_directory
+    cwe: CWE-94
+    owasp: "A03:2021"
+    severity: CRITICAL
+    pattern_type: builtin
+    params:
+      layer: webshell_signature
+      case_insensitive: true
+      max_bytes: 65536
+      signatures:
+        - id: eval-base64
+          pattern: 'eval\s*\(\s*base64_decode\s*\('
+          detail: "eval(base64_decode(...)) packed payload"
+        - id: eval-gzinflate
+          pattern: 'eval\s*\(\s*gzinflate\s*\('
+          detail: "eval(gzinflate(...)) packed payload"
+        - id: eval-str-rot13
+          pattern: 'eval\s*\(\s*str_rot13\s*\('
+          detail: "eval(str_rot13(...)) obfuscated payload"
+        - id: eval-gzuncompress
+          pattern: 'eval\s*\(\s*gzuncompress\s*\('
+          detail: "eval(gzuncompress(...)) packed payload"
+        - id: system-superglobal
+          pattern: 'system\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)'
+          detail: "system() fed directly from a request superglobal"
+        - id: passthru-superglobal
+          pattern: 'passthru\s*\(\s*\$_'
+          detail: "passthru() fed from a superglobal"
+        - id: shell_exec-superglobal
+          pattern: 'shell_exec\s*\(\s*\$_'
+          detail: "shell_exec() fed from a superglobal"
+        - id: exec-superglobal
+          pattern: '\bexec\s*\(\s*\$_'
+          detail: "exec() fed from a superglobal"
+        - id: assert-superglobal
+          pattern: 'assert\s*\(\s*\$_'
+          detail: "assert() used as an eval gadget on a superglobal"
+        - id: eval-superglobal
+          pattern: 'eval\s*\(\s*@?\s*\$_'
+          detail: "eval() fed directly from a superglobal"
+        - id: preg-replace-e-generic
+          pattern: 'preg_replace\s*\(\s*[''"][^''"]*/e'
+          detail: "preg_replace with deprecated /e (code-eval) modifier"
+        - id: files-move-eval
+          pattern: '\$_FILES[\s\S]{0,200}move_uploaded_file[\s\S]{0,200}eval'
+          detail: "Uploaded file moved then eval()'d (dropper)"
+        - id: preg-replace-e
+          pattern: 'preg_replace\s*\(\s*[''"][^''"]*/e[^''"]*[''"][\s\S]{0,80}\$_(?:GET|POST|REQUEST)'
+          detail: "preg_replace /e modifier with request input (code eval)"
+        - id: globals-obfuscation
+          pattern: '\$\{\s*[''"]_[''"]\s*\.\s*[''"]_[''"]'
+          detail: 'Obfuscated superglobal access via ${"_"."_"...}'
+        - id: chr-chain
+          pattern: '(?:chr\s*\(\s*\d+\s*\)\s*\.\s*){2,}chr\s*\('
+          detail: "Chained chr() character obfuscation (3+)"
+        - id: variable-function
+          pattern: '\$[a-zA-Z_]\w{0,2}\s*\(\s*\$[a-zA-Z_]\w{0,2}\s*\)'
+          detail: "Variable-variable function call $a($b) (dynamic dispatch)"
+    description: >-
+      The file content matches a known PHP webshell / obfuscation signature.
+      Combined with its presence in an upload directory this strongly indicates a
+      backdoor.
+    remediation: >-
+      Remove the file immediately, preserve a copy for forensics, rotate
+      secrets, and audit access logs for the upload and subsequent requests.
+
+  - id: RULE-UPLOAD-005
+    name: "Potentially malicious PDF payload"
+    module: upload_directory
+    cwe: CWE-434
+    owasp: "A05:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      layer: pdf_payload
+      max_bytes: 1048576
+      keywords:
+        - { token: "/JavaScript", detail: "Embedded JavaScript" }
+        - { token: "/JS", detail: "Embedded JavaScript (/JS)" }
+        - { token: "/OpenAction", detail: "Automatic action on open" }
+        - { token: "/AA", detail: "Additional automatic actions" }
+        - { token: "/Launch", detail: "Launch action (external program)" }
+        - { token: "/EmbeddedFile", detail: "Embedded file stream" }
+    description: >-
+      A PDF in an upload directory contains active-content markers
+      (/JavaScript, /OpenAction, /Launch, /EmbeddedFile) commonly used to deliver
+      malware to reviewers/editors who open submissions.
+    remediation: >-
+      Quarantine the PDF and scan it with a dedicated PDF malware analyzer.
+      Consider sanitizing/flattening submitted PDFs before distribution.

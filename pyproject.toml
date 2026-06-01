@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ojs-sast"
+version = "1.0.0"
+description = "OJS-aware Extended Static Application Security Testing (SAST) CLI for scanning Open Journal Systems deployments"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ojs-sast" }]
+keywords = ["sast", "security", "ojs", "open-journal-systems", "static-analysis"]
+
+dependencies = [
+    "click>=8.0",
+    "tree-sitter==0.21.3",
+    "tree-sitter-languages>=1.10.2",
+    "python-magic>=0.4.27",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ojs-sast = "ojs_sast.cli:cli"
+
+[tool.setuptools]
+packages = [
+    "ojs_sast",
+    "ojs_sast.detectors",
+    "ojs_sast.ruleset",
+    "ojs_sast.reporters",
+]
+
+[tool.setuptools.package-data]
+"ojs_sast.ruleset" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

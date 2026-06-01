@@ -1,0 +1,253 @@
+# Source code rules for ojs-sast.
+#
+# pattern_type values:
+#   regex   -> matched by the generic regex engine (per file_extensions)
+#   smarty  -> handled by the dedicated Smarty template scanner
+#   ast     -> handled by a dedicated tree-sitter AST handler
+#   taint   -> emitted by the data-flow taint engine (metadata only here)
+#
+# The taint engine emits findings under RULE-SRC-002/005/006/007/008 and pulls
+# severity/CWE/remediation from these entries, so regex hits and taint-confirmed
+# hits on the same construct share a rule id and de-duplicate cleanly.
+
+rules:
+  - id: RULE-SRC-001
+    name: "Smarty output without escape filter"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: HIGH
+    file_extensions: [".tpl", ".smarty"]
+    pattern_type: smarty
+    pattern: '\{\$[a-zA-Z_][a-zA-Z0-9_]*(?![^}]*\|escape)[^}]*\}'
+    cvss_score: 6.1
+    cve_references: ["CVE-2023-5897", "CVE-2025-67885", "CVE-2025-67888"]
+    description: >-
+      A Smarty variable is emitted into the template output without the
+      |escape modifier. In OJS templates, unescaped output of request-derived
+      or user-stored values leads to stored or reflected cross-site scripting.
+    remediation: >-
+      Apply an output escaper, e.g. {$var|escape} for HTML context or
+      {$var|escape:"url"} for URL context. Only omit |escape when the value is
+      provably safe HTML produced server-side.
+    false_positive_exceptions:
+      - pattern: '\|escape'
+        description: "Variable already has an escape filter applied."
+      - pattern: '\{\$smarty\.'
+        description: "Smarty reserved variable, not user data."
+
+  - id: RULE-SRC-002
+    name: "Tainted / NativeXml filename in file operation (path traversal)"
+    module: source_code
+    cwe: CWE-22
+    owasp: "A01:2021"
+    severity: HIGH
+    file_extensions: [".php", ".phtml", ".inc", ".php3", ".php4", ".php5"]
+    pattern_type: regex
+    pattern: '(?:file_put_contents|move_uploaded_file|copy|rename|fopen|unlink)\s*\([^;]*?->\s*(?:getFilename|getName|getClientFileName|getLocalizedName)\s*\('
+    cvss_score: 7.5
+    cve_references: ["CVE-2023-5897", "CVE-2025-67886"]
+    description: >-
+      A filename obtained from a NativeXml import object (getFilename()/getName())
+      or other user-controlled source is used in a filesystem operation without
+      normalization, allowing directory traversal (e.g. ../../) and writes
+      outside the intended directory.
+    remediation: >-
+      Normalize and validate the path with realpath()/basename(), reject any
+      component containing '..', and confine writes to an allow-listed base
+      directory before performing the file operation.
+
+  - id: RULE-SRC-003
+    name: "Handler POST method missing CSRF check"
+    module: source_code
+    cwe: CWE-352
+    owasp: "A01:2021"
+    severity: MEDIUM
+    file_extensions: [".php", ".inc"]
+    pattern_type: ast
+    cvss_score: 4.3
+    # CVE intentionally left unset: map to the confirmed OJS CSRF advisory in the
+    # thesis ground-truth dataset rather than asserting an unverified identifier.
+    cve_references: []
+    description: >-
+      A Handler class defines a state-changing method that consumes request
+      input ($_POST/$_REQUEST/getUserVar) but no CSRF validation
+      (_checkCSRF / validateCSRFToken / requireCSRF) or authorization policy was
+      detected in the class. This is a heuristic; confirm by inspecting the
+      handler's authorize()/policy chain.
+    remediation: >-
+      Validate a CSRF token for every state-changing POST handler, e.g. via
+      $request->checkCSRF(), $this->validateCSRFToken(), or by adding an
+      authorization policy in authorize().
+
+  - id: RULE-SRC-004
+    name: "LESS compiler injection from user input"
+    module: source_code
+    cwe: CWE-94
+    owasp: "A03:2021"
+    severity: HIGH
+    file_extensions: [".php", ".inc", ".phtml"]
+    pattern_type: regex
+    pattern: '(?i)(?:less(?:php|c)?|Less_Parser)[^;\n]{0,160}(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|getUserVar\s*\()'
+    cvss_score: 8.1
+    cve_references: ["CVE-2025-67887"]
+    description: >-
+      User-controlled input is passed into a LESS compilation routine
+      (lessc / Less_Parser). LESS allows JavaScript-style and import directives
+      that can lead to file disclosure or code execution during compilation.
+    remediation: >-
+      Never compile attacker-controlled LESS. Compile only static, packaged
+      stylesheets; if dynamic variables are required, inject them through the
+      compiler's typed variable API rather than string concatenation.
+
+  - id: RULE-SRC-005
+    name: "SQL injection via DB::raw / Capsule::raw with concatenation"
+    module: source_code
+    cwe: CWE-89
+    owasp: "A03:2021"
+    severity: CRITICAL
+    file_extensions: [".php", ".inc", ".phtml"]
+    pattern_type: regex
+    pattern: '(?:(?:DB|Capsule)::|->)(?:raw|statement|unprepared)\s*\([^;]*?\.\s*\$[A-Za-z_]'
+    cvss_score: 9.8
+    cve_references: ["CVE-2025-67889"]
+    description: >-
+      A raw SQL expression (DB::raw / Capsule::raw / ->statement) is built by
+      concatenating a PHP variable, bypassing query parameter binding. If the
+      variable is request-derived this is SQL injection.
+    remediation: >-
+      Use parameter binding / prepared statements. Pass values via bindings
+      (e.g. ?-placeholders or named bindings) instead of concatenating them into
+      the raw SQL string.
+
+  - id: RULE-SRC-006
+    name: "Deserialization of user-controlled data (unserialize)"
+    module: source_code
+    cwe: CWE-502
+    owasp: "A08:2021"
+    severity: CRITICAL
+    file_extensions: [".php", ".inc", ".phtml", ".php5"]
+    pattern_type: regex
+    pattern: 'unserialize\s*\([^;)]*(?:\$_(?:GET|POST|REQUEST|COOKIE|FILES)\b|getUserVar\s*\()'
+    cvss_score: 9.8
+    cve_references: []
+    description: >-
+      unserialize() is called on data that traces back to user input. PHP object
+      deserialization can trigger gadget chains leading to remote code execution,
+      arbitrary file operations, or SQL injection.
+    remediation: >-
+      Do not unserialize untrusted input. Use json_decode() for data interchange,
+      or pass allowed_classes=false to unserialize() if PHP serialization is
+      unavoidable.
+
+  - id: RULE-SRC-007
+    name: "Cross-site scripting via tainted echo/print"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: HIGH
+    pattern_type: taint
+    cvss_score: 6.1
+    cve_references: ["CVE-2023-5897"]
+    description: >-
+      Request-derived (tainted) data reaches an output sink (echo, print,
+      printf) without passing through an HTML escaper such as
+      PKPString::htmlspecialchars(). This is reflected cross-site scripting.
+    remediation: >-
+      Escape the value before output with PKPString::htmlspecialchars() (or
+      htmlspecialchars(..., ENT_QUOTES)). In templates prefer {$var|escape}.
+
+  - id: RULE-SRC-008
+    name: "Code / command execution sink reached by tainted data"
+    module: source_code
+    cwe: CWE-94
+    owasp: "A03:2021"
+    severity: CRITICAL
+    pattern_type: taint
+    cvss_score: 9.8
+    cve_references: []
+    description: >-
+      Request-derived (tainted) data reaches a code- or command-execution sink
+      (eval, assert, system, exec, shell_exec, passthru, proc_open, popen),
+      enabling arbitrary code or OS command execution.
+    remediation: >-
+      Never pass untrusted input to these functions. Replace eval() with safe
+      logic; for OS commands use escapeshellarg()/escapeshellcmd() with a fixed
+      command and an allow-list of arguments, or a native PHP API instead.
+
+  - id: RULE-SRC-009
+    name: "Dangerous function call with literal superglobal argument"
+    module: source_code
+    cwe: CWE-94
+    owasp: "A03:2021"
+    severity: CRITICAL
+    file_extensions: [".php", ".inc", ".phtml", ".php5"]
+    pattern_type: regex
+    pattern: '\b(?:eval|assert|system|exec|shell_exec|passthru|proc_open|popen)\s*\([^;)]*\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b'
+    cvss_score: 9.8
+    cve_references: []
+    description: >-
+      A code/command execution function is called with a superglobal directly in
+      its argument list (single-statement sink). This is a high-confidence
+      complement to the taint engine for one-liners.
+    remediation: >-
+      Remove the dangerous call or strictly validate and escape arguments. Prefer
+      native PHP APIs over shelling out, and never eval() request input.
+
+  - id: RULE-SRC-010
+    name: "JavaScript innerHTML/outerHTML assigned a non-literal value"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: MEDIUM
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: '\.(?:innerHTML|outerHTML)\s*=\s*[^"''`;\s][^;\n]*'
+    cvss_score: 5.4
+    cve_references: []
+    description: >-
+      An element's innerHTML/outerHTML is assigned a value that is not a plain
+      string literal (likely a variable or expression), which can introduce
+      DOM-based XSS if the value contains attacker-controlled markup.
+    remediation: >-
+      Use textContent for text, or sanitize HTML with a vetted sanitizer before
+      assigning to innerHTML. Avoid building markup from untrusted strings.
+    false_positive_exceptions:
+      - pattern: "innerHTML\\s*=\\s*['\"`]\\s*['\"`]"
+        description: "Clearing the element with an empty string literal."
+
+  - id: RULE-SRC-011
+    name: "JavaScript document.write with non-literal argument"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: MEDIUM
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: 'document\.write(?:ln)?\s*\(\s*[^"''`)\s]'
+    cvss_score: 5.4
+    cve_references: []
+    description: >-
+      document.write()/writeln() is called with a non-literal argument, which
+      can introduce DOM-based XSS when the argument is attacker-controlled.
+    remediation: >-
+      Avoid document.write(). Build DOM nodes with safe APIs (createElement,
+      textContent) and sanitize any HTML before insertion.
+
+  - id: RULE-SRC-012
+    name: "JavaScript eval() usage"
+    module: source_code
+    cwe: CWE-95
+    owasp: "A03:2021"
+    severity: HIGH
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: '(?<![\w.$])eval\s*\('
+    cvss_score: 7.4
+    cve_references: []
+    description: >-
+      eval() executes arbitrary JavaScript and is a common DOM XSS / code
+      injection sink when fed dynamic input.
+    remediation: >-
+      Remove eval(). Use JSON.parse() for data, or refactor to avoid dynamic
+      code execution entirely.
