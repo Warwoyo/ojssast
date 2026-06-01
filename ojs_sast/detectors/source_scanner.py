@@ -7,6 +7,8 @@ Combines three techniques over OJS source files:
 * **Regex pattern matching** driven by the YAML ruleset (PHP + JS rules).
 * **Dedicated handlers** for Smarty templates (unescaped output) and a
   tree-sitter handler for Handler CSRF checks.
+* **CVE-specific scanning** via structured multi-condition rules that target
+  known OJS vulnerabilities with high precision.
 
 If tree-sitter is unavailable the scanner degrades gracefully to regex-only.
 """
@@ -870,6 +872,17 @@ class SourceScanner:
         self._csrf_rule = ruleset.get("RULE-SRC-003")
         self.files_scanned = 0
 
+        # Build set of rule IDs that have reporting enabled.
+        # Rules with reporting: false are internal diagnostics only.
+        self._non_reporting_rules: set = set()
+        for rule in ruleset:
+            if rule.params.get("reporting") is False:
+                self._non_reporting_rules.add(rule.id)
+
+        # CVE scanner for structured, CVE-specific detection.
+        from .cve_scanner import CVEScanner
+        self._cve_scanner = CVEScanner(ruleset, ojs_version=ojs_version)
+
     def _progress(self, msg: str) -> None:
         if self.progress_cb:
             self.progress_cb(msg)
@@ -917,13 +930,23 @@ class SourceScanner:
                 if self._csrf_rule is None or self._csrf_rule.pattern_type == "ast":
                     findings.extend(scan_csrf(rel, raw, self._csrf_rule))
             findings.extend(self.regex_engine.scan(rel, ext, text))
+            # CVE-specific scanning for PHP files.
+            findings.extend(self._cve_scanner.scan_file(path, rel, raw, text))
 
         elif ext in SMARTY_EXTENSIONS:
             findings.extend(scan_smarty(rel, text, self._smarty_rule))
             findings.extend(self.regex_engine.scan(rel, ext, text))
+            # CVE-specific scanning for Smarty template files.
+            findings.extend(self._cve_scanner.scan_file(path, rel, raw, text))
 
         elif ext in JS_EXTENSIONS:
             findings.extend(self.regex_engine.scan(rel, ext, text))
+
+        # Filter out findings from non-reporting (internal diagnostic) rules.
+        findings = [
+            f for f in findings
+            if f.rule_id not in self._non_reporting_rules
+        ]
 
         return findings
 

@@ -23,7 +23,7 @@ DEFAULT_RULESET_DIR = Path(__file__).resolve().parent
 
 REQUIRED_FIELDS = ("id", "name", "module", "severity")
 VALID_MODULES = {"source_code", "config", "upload_directory"}
-VALID_PATTERN_TYPES = {"regex", "smarty", "ast", "taint", "builtin"}
+VALID_PATTERN_TYPES = {"regex", "smarty", "ast", "taint", "builtin", "cve"}
 
 
 class RulesetError(Exception):

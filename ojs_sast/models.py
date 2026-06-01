@@ -143,6 +143,14 @@ class Finding:
     # merged during de-duplication.
     dedup_discriminator: Optional[str] = None
 
+    # CVE-specific evidence fields (populated by CVE scanner, optional for others).
+    matched_source: Optional[str] = None
+    matched_sink: Optional[str] = None
+    missing_patch_evidence: Optional[str] = None
+    safe_patch_checked: Optional[List[str]] = None
+    affected_version_reasoning: Optional[str] = None
+    confidence_reason: Optional[str] = None
+
     finding_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -195,6 +203,13 @@ class Finding:
             "taint_source": self.taint_source,
             "confidence": self.confidence,
             "remediation": self.remediation,
+            # CVE evidence fields (omitted when None for backward compat).
+            **({"matched_source": self.matched_source} if self.matched_source else {}),
+            **({"matched_sink": self.matched_sink} if self.matched_sink else {}),
+            **({"missing_patch_evidence": self.missing_patch_evidence} if self.missing_patch_evidence else {}),
+            **({"safe_patch_checked": self.safe_patch_checked} if self.safe_patch_checked else {}),
+            **({"affected_version_reasoning": self.affected_version_reasoning} if self.affected_version_reasoning else {}),
+            **({"confidence_reason": self.confidence_reason} if self.confidence_reason else {}),
             **({"extra": self.extra} if self.extra else {}),
         }
 

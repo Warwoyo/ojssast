@@ -1,84 +1,57 @@
 # Configuration rules for ojs-sast (config.inc.php + Nginx).
 #
-# These map to the OJS config SAST ground-truth groups: general, security,
-# database, files, plus Nginx hardening checks. The config scanner dispatches
-# on rule id and reads thresholds/defaults from each rule's `params` block.
+# IDs aligned to OJS config SAST ground-truth check IDs.
+# Groups: general (GEN), security (SEC), database (DB), files (FILE),
+#         email (EMAIL), captcha (CAP), debug (DBG), nginx (NGX).
 #
 # FALSE-POSITIVE / VERSION AWARENESS: where a directive is absent but the OJS
 # default is secure (httponly, samesite in 3.3.0+), the finding is downgraded to
 # INFO and notes the version that changed the default.
 
 rules:
-  # ----------------------------- GROUP: general -----------------------------
-  - id: OJS-CFG-FILE-004
-    name: "config.inc.php missing PHP exit guard"
+  # ============================== GROUP: general ==============================
+  - id: OJS-CFG-GEN-001
+    name: "Installation status must be On in production"
     module: config
-    cwe: CWE-538
+    cwe: CWE-1188
     owasp: "A05:2021"
-    severity: CRITICAL
-    pattern_type: builtin
-    params:
-      check: guard_line
-      guard_tokens: ["<?php", "exit"]
-      scan_lines: 3
-    description: >-
-      config.inc.php should begin with a `;<?php exit; ?>` guard so that if the
-      web server ever serves the file as plain text or executes it as PHP, the
-      database credentials and secrets are not disclosed. The guard is missing.
-    remediation: >-
-      Add `;<?php exit; ?>` as the very first line of config.inc.php and keep the
-      file outside the web root where possible.
-
-  # ----------------------------- GROUP: security ----------------------------
-  - id: OJS-CFG-SEC-001
-    name: "Weak or default security salt"
-    module: config
-    cwe: CWE-330
-    owasp: "A02:2021"
-    severity: CRITICAL
-    pattern_type: builtin
-    params:
-      check: value_strength
-      section: security
-      key: salt
-      # Ground truth (OJS-CFG-SEC-006) requires ≥ 24 chars; 32 is recommended.
-      # Threshold set to 24 to match the verified ground-truth minimum; values
-      # between 24-31 chars are accepted but flagged as LOW if < 32.
-      min_length: 24
-      default_values:
-        - "changeme"
-        - "YOUR_UNIQUE_SALT"
-        - ""
-        - "secret"
-        - "YouMustSetASecretKeyHere!!"   # OJS template placeholder
-    description: >-
-      The `salt` is empty, set to a known default placeholder, or shorter than
-      24 characters. The salt protects password-reset hashes, API keys and email
-      verification tokens; a weak or default salt undermines all of them.
-    remediation: >-
-      Set `salt` to at least 32 random bytes (e.g. `openssl rand -base64 48`) and
-      keep it secret. Rotating the salt invalidates all existing reset tokens.
-
-  - id: OJS-CFG-SEC-002
-    name: "Empty or default api_key_secret"
-    module: config
-    cwe: CWE-798
-    owasp: "A02:2021"
     severity: HIGH
     pattern_type: builtin
     params:
-      check: value_strength
-      section: security
-      key: api_key_secret
-      min_length: 24
-      default_values: ["", "changeme", "YOUR_API_KEY_SECRET"]
+      check: bool_directive
+      section: general
+      key: installed
+      secure_value: "On"
+      insecure_value: "Off"
+      default_when_absent: "Off"
     description: >-
-      `api_key_secret` is empty or set to a default. This secret signs API tokens;
-      a predictable value lets attackers forge or decrypt API credentials.
-    remediation: >-
-      Set `api_key_secret` to a long random value and restart the application.
+      `installed` is Off, meaning the OJS installer/setup wizard is still
+      accessible. An attacker could re-initialize the database and take over.
+    remediation: "Ensure `installed = On` in [general] on deployed systems."
 
-  - id: OJS-CFG-SEC-003
+  - id: OJS-CFG-GEN-002
+    name: "base_url must use HTTPS and not be a placeholder"
+    module: config
+    cwe: CWE-319
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: base_url_scheme
+      section: general
+      key: base_url
+      required_scheme: "https"
+      placeholder_values:
+        - "https://pkp.sfu.ca/ojs"
+        - "http://pkp.sfu.ca/ojs"
+    description: >-
+      `base_url` uses HTTP or is still the default placeholder. Canonical
+      URLs should use HTTPS for transport security.
+    remediation: >-
+      Set `base_url` to `https://your-domain.example.org` with a valid TLS
+      certificate configured on the web server.
+
+  - id: OJS-CFG-GEN-003
     name: "Insecure allowed_hosts (empty or wildcard)"
     module: config
     cwe: CWE-644
@@ -99,45 +72,67 @@ rules:
       Set `allowed_hosts` to an explicit JSON array of valid hostnames, e.g.
       `allowed_hosts = '["journal.example.org"]'`.
 
-  - id: OJS-CFG-SEC-004
-    name: "force_ssl disabled"
+  - id: OJS-CFG-GEN-004
+    name: "trust_x_forwarded_for enabled"
     module: config
-    cwe: CWE-319
-    owasp: "A02:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      check: bool_directive
-      section: security
-      key: force_ssl
-      secure_value: "On"
-      default_when_absent: "Off"
-    description: >-
-      `force_ssl` is Off, so OJS does not redirect traffic to HTTPS. Session
-      cookies and credentials can be transmitted in cleartext.
-    remediation: "Set `force_ssl = On` and serve the site over TLS only."
-
-  - id: OJS-CFG-SEC-005
-    name: "session_cookie_httponly disabled"
-    module: config
-    cwe: CWE-1004
+    cwe: CWE-290
     owasp: "A05:2021"
     severity: MEDIUM
     pattern_type: builtin
     params:
       check: bool_directive
       section: general
-      key: session_cookie_httponly
-      secure_value: "On"
-      default_when_absent: "On"
-      absent_severity: INFO
-      default_since: "3.3.0"
+      key: trust_x_forwarded_for
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
     description: >-
-      The session cookie is not flagged HttpOnly, so client-side JavaScript can
-      read it, escalating any XSS into full session theft.
-    remediation: "Set `session_cookie_httponly = On`."
+      `trust_x_forwarded_for` is On. Unless behind a trusted reverse proxy,
+      this allows IP spoofing for session_check_ip bypass and log tampering.
+    remediation: >-
+      Set `trust_x_forwarded_for = Off` unless a trusted reverse proxy sets
+      X-Forwarded-For headers and the proxy strips client-supplied values.
 
-  - id: OJS-CFG-SEC-006
+  - id: OJS-CFG-GEN-005
+    name: "allow_url_fopen enabled"
+    module: config
+    cwe: CWE-918
+    owasp: "A10:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: allow_url_fopen
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "On"
+    description: >-
+      `allow_url_fopen` is On. This enables fopen-family functions to access
+      remote URLs, which can be abused in SSRF scenarios.
+    remediation: "Set `allow_url_fopen = Off` unless explicitly required."
+
+  - id: OJS-CFG-GEN-006
+    name: "Excessive session_lifetime"
+    module: config
+    cwe: CWE-613
+    owasp: "A07:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: integer_threshold
+      section: general
+      key: session_lifetime
+      operator: "<="
+      threshold: 43200
+      default_when_absent: "0"
+      warn_severity: low
+    description: >-
+      `session_lifetime` exceeds 12 hours (43200 seconds), allowing sessions
+      to persist for extended periods if not closed.
+    remediation: "Set `session_lifetime` to 43200 or less."
+
+  - id: OJS-CFG-GEN-007
     name: "Weak session_samesite policy"
     module: config
     cwe: CWE-1275
@@ -157,26 +152,324 @@ rules:
       cross-site requests, weakening CSRF protection.
     remediation: "Set `session_samesite = Lax` (or Strict for stricter isolation)."
 
-  - id: OJS-CFG-SEC-007
-    name: "show_stacktrace enabled in production"
+  - id: OJS-CFG-GEN-008
+    name: "Sandbox mode should be Off in production"
     module: config
-    cwe: CWE-209
+    cwe: CWE-16
     owasp: "A05:2021"
-    severity: LOW
+    severity: INFO
     pattern_type: builtin
     params:
       check: bool_directive
-      section: debug
-      key: show_stacktrace
+      section: general
+      key: sandbox
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
     description: >-
-      `show_stacktrace` is On, exposing file paths and stack frames in error
-      output to end users, aiding reconnaissance.
-    remediation: "Set `show_stacktrace = Off` in production."
+      `sandbox` is On. Sandbox mode restricts certain operations but may
+      indicate a non-production configuration.
+    remediation: "Set `sandbox = Off` for production deployments."
 
-  # ----------------------------- GROUP: database ----------------------------
+  - id: OJS-CFG-GEN-009
+    name: "session_cookie_httponly disabled"
+    module: config
+    cwe: CWE-1004
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: session_cookie_httponly
+      secure_value: "On"
+      default_when_absent: "On"
+      absent_severity: INFO
+      default_since: "3.3.0"
+    description: >-
+      The session cookie is not flagged HttpOnly, so client-side JavaScript can
+      read it, escalating any XSS into full session theft.
+    remediation: "Set `session_cookie_httponly = On`."
+
+  # ============================== GROUP: security ============================
+  - id: OJS-CFG-SEC-001
+    name: "force_ssl disabled"
+    module: config
+    cwe: CWE-319
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: security
+      key: force_ssl
+      secure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `force_ssl` is Off, so OJS does not redirect traffic to HTTPS. Session
+      cookies and credentials can be transmitted in cleartext.
+    remediation: "Set `force_ssl = On` and serve the site over TLS only."
+
+  - id: OJS-CFG-SEC-002
+    name: "force_login_ssl disabled"
+    module: config
+    cwe: CWE-319
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: security
+      key: force_login_ssl
+      secure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `force_login_ssl` is Off. Login credentials may be submitted in
+      cleartext if the login page is not forced to HTTPS.
+    remediation: >-
+      Set `force_login_ssl = On`. Ideally also set `force_ssl = On`.
+
+  - id: OJS-CFG-SEC-003
+    name: "session_check_ip disabled"
+    module: config
+    cwe: CWE-384
+    owasp: "A07:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: security
+      key: session_check_ip
+      secure_value: "On"
+      insecure_value: "Off"
+      default_when_absent: "On"
+    description: >-
+      `session_check_ip` is Off. Session hijacking is easier when the session
+      is not bound to the client IP address.
+    remediation: "Set `session_check_ip = On`."
+
+  - id: OJS-CFG-SEC-004
+    name: "Insecure encryption algorithm (md5)"
+    module: config
+    cwe: CWE-327
+    owasp: "A02:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: enum_directive
+      section: security
+      key: encryption
+      secure_values: ["sha1"]
+      default_when_absent: "sha1"
+    description: >-
+      `encryption` is set to md5 or an unsupported value. PKP requires sha1
+      (legacy migration hash; modern hashing done internally).
+    remediation: "Set `encryption = sha1`."
+
+  - id: OJS-CFG-SEC-005
+    name: "session_expire_on_close disabled"
+    module: config
+    cwe: CWE-613
+    owasp: "A07:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: security
+      key: session_expire_on_close
+      secure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `session_expire_on_close` is Off. Sessions persist after browser close,
+      increasing risk on shared devices.
+    remediation: "Set `session_expire_on_close = On`."
+
+  - id: OJS-CFG-SEC-006
+    name: "Weak or default security salt"
+    module: config
+    cwe: CWE-330
+    owasp: "A02:2021"
+    severity: CRITICAL
+    pattern_type: builtin
+    params:
+      check: value_strength
+      section: security
+      key: salt
+      min_length: 24
+      default_values:
+        - "changeme"
+        - "YOUR_UNIQUE_SALT"
+        - ""
+        - "secret"
+        - "YouMustSetASecretKeyHere!!"
+    description: >-
+      The `salt` is empty, set to a known default placeholder, or shorter than
+      24 characters. The salt protects password-reset hashes, API keys and email
+      verification tokens; a weak or default salt undermines all of them.
+    remediation: >-
+      Set `salt` to at least 32 random bytes (e.g. `openssl rand -base64 48`) and
+      keep it secret. Rotating the salt invalidates all existing reset tokens.
+
+  - id: OJS-CFG-SEC-007
+    name: "Empty or default api_key_secret"
+    module: config
+    cwe: CWE-798
+    owasp: "A02:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: value_strength
+      section: security
+      key: api_key_secret
+      min_length: 24
+      default_values: ["", "changeme", "YOUR_API_KEY_SECRET"]
+    description: >-
+      `api_key_secret` is empty or set to a default. This secret signs API tokens;
+      a predictable value lets attackers forge or decrypt API credentials.
+    remediation: >-
+      Set `api_key_secret` to a long random value and restart the application.
+
+  - id: OJS-CFG-SEC-008
+    name: "Excessive password reset token lifetime"
+    module: config
+    cwe: CWE-640
+    owasp: "A07:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: integer_threshold
+      section: security
+      key: reset_seconds
+      operator: "<="
+      threshold: 7200
+      default_when_absent: "7200"
+      warn_severity: low
+    description: >-
+      `reset_seconds` exceeds 7200 (2 hours), giving attackers a wider window
+      to abuse password-reset tokens.
+    remediation: "Set `reset_seconds` to 7200 or less (3600 recommended)."
+
+  - id: OJS-CFG-SEC-009
+    name: "Unrestricted plugin installation"
+    module: config
+    cwe: CWE-434
+    owasp: "A08:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: enum_directive
+      section: security
+      key: allow_plugin_install
+      secure_values: ["gallery_only", "upgrade_only", "off"]
+      default_when_absent: "on"
+    description: >-
+      `allow_plugin_install` is 'on' (or absent, defaulting to 'on'),
+      allowing arbitrary plugin uploads. If a manager account is compromised
+      this enables RCE.
+    remediation: >-
+      Set `allow_plugin_install = gallery_only` or `off` in production.
+
+  - id: OJS-CFG-SEC-010
+    name: "Admin re-authentication timeout disabled"
+    module: config
+    cwe: CWE-613
+    owasp: "A01:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: integer_threshold
+      section: security
+      key: password_timeout
+      operator: ">"
+      threshold: 0
+      default_when_absent: "0"
+      warn_severity: medium
+    description: >-
+      `password_timeout` is 0 (or absent), so admin sessions never require
+      re-authentication for sensitive operations.
+    remediation: "Set `password_timeout = 15` (minutes) to require periodic re-auth."
+
+  - id: OJS-CFG-SEC-011
+    name: "Weak cipher for app key encryption"
+    module: config
+    cwe: CWE-326
+    owasp: "A02:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: enum_directive
+      section: security
+      key: cipher
+      secure_values: ["aes-256-gcm", "aes-256-cbc"]
+      default_when_absent: "aes-256-cbc"
+      absent_severity: INFO
+    description: >-
+      `cipher` uses a 128-bit key or is not set. 256-bit AES is recommended.
+    remediation: "Set `cipher = aes-256-gcm` for authenticated encryption."
+
+  - id: OJS-CFG-SEC-012
+    name: "Cookie encryption disabled"
+    module: config
+    cwe: CWE-311
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: security
+      key: cookie_encryption
+      secure_value: "On"
+      insecure_value: "Off"
+      default_when_absent: "On"
+      absent_severity: INFO
+    description: >-
+      `cookie_encryption` is Off. Cookie values are transmitted unencrypted.
+    remediation: "Set `cookie_encryption = On` (requires valid app_key)."
+
+  - id: OJS-CFG-SEC-013
+    name: "Empty or missing app_key"
+    module: config
+    cwe: CWE-798
+    owasp: "A02:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: value_strength
+      section: general
+      key: app_key
+      min_length: 24
+      default_values: ["", '""']
+    description: >-
+      `app_key` is empty or too short. This key is required for cookie
+      encryption and internal cryptographic operations in OJS 3.5+.
+    remediation: >-
+      Set `app_key` to a base64-encoded random key (generated by installer or
+      `php artisan key:generate` equivalent).
+
+  - id: OJS-CFG-SEC-014
+    name: "Dangerous tags in allowed_html whitelist"
+    module: config
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: INFO
+    pattern_type: builtin
+    params:
+      check: allowed_html_tags
+      section: security
+      key: allowed_html
+      dangerous_patterns:
+        - "script"
+        - "iframe"
+        - "object"
+        - "embed"
+        - "style"
+    description: >-
+      The `allowed_html` whitelist contains potentially dangerous tags
+      (script, iframe, object, embed, style) that could enable XSS.
+    remediation: >-
+      Remove dangerous tags from `allowed_html`. Keep the OJS default safe list.
+
+  # ============================== GROUP: database ============================
   - id: OJS-CFG-DB-001
     name: "Database password found in breached-password list"
     module: config
@@ -196,35 +489,24 @@ rules:
         - "qwerty"
         - "12345"
         - "dragon"
-        - "pussy"
         - "baseball"
         - "football"
         - "letmein"
         - "monkey"
-        - "696969"
         - "abc123"
         - "mustang"
-        - "michael"
         - "shadow"
         - "master"
-        - "jennifer"
         - "111111"
         - "2000"
-        - "jordan"
         - "superman"
         - "harley"
         - "1234567"
-        - "fuckme"
-        - "hunter"
-        - "fuckyou"
         - "trustno1"
         - "ranger"
         - "buster"
-        - "thomas"
         - "tigger"
-        - "robert"
         - "soccer"
-        - "fuck"
         - "batman"
         - "test"
         - "pass"
@@ -233,465 +515,29 @@ rules:
         - "george"
         - "charlie"
         - "andrew"
-        - "michelle"
-        - "love"
         - "sunshine"
-        - "jessica"
-        - "asshole"
-        - "6969"
-        - "pepper"
-        - "daniel"
-        - "access"
-        - "123456789"
+        - "iloveyou"
         - "654321"
-        - "joshua"
-        - "maggie"
+        - "123456789"
         - "starwars"
-        - "silver"
-        - "william"
-        - "dallas"
-        - "yankees"
         - "123123"
-        - "ashley"
         - "666666"
         - "hello"
-        - "amanda"
-        - "orange"
-        - "biteme"
         - "freedom"
-        - "computer"
-        - "sexy"
-        - "thunder"
-        - "nicole"
-        - "ginger"
-        - "heather"
-        - "hammer"
-        - "summer"
-        - "corvette"
-        - "taylor"
-        - "fucker"
-        - "austin"
-        - "1111"
-        - "merlin"
-        - "matthew"
-        - "121212"
-        - "golfer"
-        - "cheese"
-        - "princess"
-        - "martin"
-        - "chelsea"
-        - "patrick"
-        - "richard"
-        - "diamond"
-        - "yellow"
-        - "bigdog"
-        - "secret"
-        - "asdfgh"
-        - "sparky"
-        - "cowboy"
-        - "camaro"
-        - "anthony"
-        - "matrix"
-        - "falcon"
-        - "iloveyou"
-        - "bailey"
-        - "guitar"
-        - "jackson"
-        - "purple"
-        - "scooter"
-        - "phoenix"
-        - "aaaaaa"
-        - "morgan"
-        - "tigers"
-        - "porsche"
-        - "mickey"
-        - "maverick"
-        - "cookie"
-        - "nascar"
-        - "peanut"
-        - "justin"
-        - "131313"
-        - "money"
-        - "horny"
-        - "samantha"
-        - "panties"
-        - "steelers"
-        - "joseph"
-        - "snoopy"
-        - "boomer"
         - "whatever"
-        - "iceman"
-        - "smokey"
-        - "gateway"
-        - "dakota"
-        - "cowboys"
-        - "eagles"
-        - "chicken"
-        - "dick"
-        - "black"
-        - "zxcvbn"
-        - "please"
-        - "andrea"
-        - "ferrari"
-        - "knight"
-        - "hardcore"
-        - "melissa"
-        - "compaq"
-        - "coffee"
-        - "booboo"
-        - "bitch"
-        - "johnny"
-        - "bulldog"
-        - "xxxxxx"
-        - "welcome"
-        - "james"
-        - "player"
-        - "ncc1701"
-        - "wizard"
-        - "scooby"
-        - "charles"
-        - "junior"
-        - "internet"
-        - "bigdick"
-        - "mike"
-        - "brandy"
-        - "tennis"
-        - "blowjob"
-        - "banana"
-        - "monster"
-        - "spider"
-        - "lakers"
-        - "miller"
-        - "rabbit"
-        - "enter"
-        - "mercedes"
-        - "brandon"
-        - "steven"
-        - "fender"
-        - "john"
-        - "yamaha"
-        - "diablo"
-        - "chris"
-        - "boston"
-        - "tiger"
-        - "marine"
-        - "chicago"
-        - "rangers"
-        - "gandalf"
-        - "winter"
-        - "bigtits"
-        - "barney"
-        - "edward"
-        - "raiders"
-        - "porn"
-        - "badboy"
-        - "blowme"
-        - "spanky"
-        - "bigdaddy"
-        - "johnson"
-        - "chester"
-        - "london"
-        - "midnight"
-        - "blue"
-        - "fishing"
-        - "000000"
-        - "hannah"
-        - "slayer"
-        - "11111111"
-        - "rachel"
-        - "sexsex"
-        - "redsox"
-        - "thx1138"
-        - "asdf"
-        - "marlboro"
-        - "panther"
-        - "zxcvbnm"
-        - "arsenal"
-        - "oliver"
         - "qazwsx"
-        - "mother"
-        - "victoria"
-        - "7777777"
-        - "jasper"
-        - "angel"
-        - "david"
-        - "winner"
-        - "crystal"
-        - "golden"
-        - "butthead"
-        - "viking"
-        - "jack"
-        - "iwantu"
-        - "shannon"
-        - "murphy"
-        - "angels"
-        - "prince"
-        - "cameron"
-        - "girls"
-        - "madison"
-        - "wilson"
-        - "carlos"
-        - "hooters"
-        - "willie"
-        - "startrek"
-        - "captain"
-        - "maddog"
-        - "jasmine"
-        - "butter"
-        - "booger"
-        - "angela"
-        - "golf"
-        - "lauren"
-        - "rocket"
-        - "tiffany"
-        - "theman"
-        - "dennis"
-        - "liverpoo"
-        - "flower"
-        - "forever"
-        - "green"
-        - "jackie"
-        - "muffin"
-        - "turtle"
-        - "sophie"
-        - "danielle"
-        - "redskins"
-        - "toyota"
-        - "jason"
-        - "sierra"
-        - "winston"
-        - "debbie"
-        - "giants"
-        - "packers"
-        - "newyork"
-        - "jeremy"
-        - "casper"
-        - "bubba"
-        - "112233"
-        - "sandra"
-        - "lovers"
-        - "mountain"
-        - "united"
-        - "cooper"
-        - "driver"
-        - "tucker"
-        - "helpme"
-        - "fucking"
-        - "pookie"
-        - "lucky"
-        - "maxwell"
-        - "8675309"
-        - "bear"
-        - "suckit"
-        - "gators"
-        - "5150"
-        - "222222"
-        - "shithead"
-        - "fuckoff"
-        - "jaguar"
-        - "monica"
-        - "fred"
-        - "happy"
-        - "hotdog"
-        - "tits"
-        - "gemini"
-        - "lover"
-        - "xxxxxxxx"
-        - "777777"
-        - "canada"
-        - "nathan"
-        - "victor"
-        - "florida"
-        - "88888888"
-        - "nicholas"
-        - "rosebud"
-        - "metallic"
-        - "doctor"
-        - "trouble"
-        - "success"
-        - "stupid"
-        - "tomcat"
-        - "warrior"
-        - "peaches"
-        - "apples"
-        - "fish"
-        - "qwertyui"
-        - "magic"
-        - "buddy"
-        - "dolphins"
-        - "rainbow"
-        - "gunner"
-        - "987654"
-        - "freddy"
-        - "alexis"
-        - "braves"
-        - "cock"
-        - "2112"
-        - "1212"
-        - "cocacola"
-        - "xavier"
-        - "dolphin"
-        - "testing"
-        - "bond007"
-        - "member"
-        - "calvin"
-        - "voodoo"
-        - "7777"
-        - "samson"
-        - "alex"
-        - "apollo"
-        - "fire"
-        - "tester"
-        - "walter"
-        - "beavis"
-        - "voyager"
-        - "peter"
-        - "porno"
-        - "bonnie"
-        - "rush2112"
-        - "beer"
-        - "apple"
-        - "scorpio"
-        - "jonathan"
-        - "skippy"
-        - "sydney"
-        - "scott"
-        - "red123"
-        - "power"
-        - "gordon"
-        - "travis"
-        - "beaver"
-        - "star"
-        - "jackass"
-        - "flyers"
-        - "boobs"
-        - "232323"
-        - "zzzzzz"
-        - "steve"
-        - "rebecca"
-        - "scorpion"
-        - "doggie"
-        - "legend"
-        - "ou812"
-        - "yankee"
-        - "blazer"
-        - "bill"
-        - "runner"
-        - "birdie"
-        - "bitches"
-        - "555555"
-        - "parker"
-        - "topgun"
-        - "asdfasdf"
-        - "heaven"
-        - "viper"
-        - "animal"
-        - "2222"
-        - "bigboy"
-        - "4444"
-        - "arthur"
-        - "baby"
-        - "private"
-        - "godzilla"
-        - "donald"
-        - "williams"
-        - "lifehack"
-        - "phantom"
-        - "dave"
-        - "rock"
-        - "august"
-        - "sammy"
-        - "cool"
-        - "brian"
-        - "platinum"
-        - "jake"
-        - "bronco"
-        - "paul"
-        - "mark"
-        - "frank"
-        - "heka6w2"
-        - "copper"
-        - "billy"
-        - "cumshot"
-        - "garfield"
-        - "willow"
-        - "cunt"
-        - "little"
-        - "carter"
-        - "slut"
-        - "albert"
-        - "69696969"
-        - "kitten"
-        - "super"
-        - "jordan23"
-        - "eagle1"
-        - "shelby"
-        - "america"
-        - "11111"
-        - "jessie"
-        - "house"
-        - "free"
-        - "123321"
-        - "chevy"
-        - "bullshit"
-        - "white"
-        - "broncos"
-        - "horney"
-        - "surfer"
-        - "nissan"
-        - "999999"
-        - "saturn"
-        - "airborne"
-        - "elephant"
-        - "marvin"
-        - "shit"
-        - "action"
-        - "adidas"
-        - "qwert"
-        - "kevin"
-        - "1313"
-        - "explorer"
-        - "walker"
-        - "police"
-        - "christin"
-        - "december"
-        - "benjamin"
-        - "wolf"
-        - "sweet"
-        - "therock"
-        - "king"
-        - "online"
-        - "dickhead"
-        - "brooklyn"
-        - "teresa"
-        - "cricket"
-        - "sharon"
-        - "dexter"
-        - "racing"
-        - "penis"
-        - "gregory"
-        - "0000"
-        - "teens"
-        - "redwings"
-        - "dreams"
-        - "michigan"
-        - "hentai"
-        - "magnum"
-        - "87654321"
-        - "nothing"
-        - "donkey"
-        - "trinity"
-        - "digital"
-        - "333333"
-        - "stella"
-        - "cartman"
-        - "guinness"
-        - "123abc"
-        - "speedy"
-        - "buffalo"
+        - "welcome"
+        - "admin"
+        - "root"
+        - "changeme"
+        - "ojs"
+        - "mysql"
+        - "database"
+        - "secret"
+        - ""
     description: >-
-      The database password matches a common/breached password (SecLists top
-      list). Such passwords are trivially brute-forced or guessed.
+      The database password matches a common/breached password. Such
+      passwords are trivially brute-forced or guessed.
     remediation: >-
       Replace with a long, unique, randomly generated password and update
       config.inc.php plus the database grant.
@@ -713,8 +559,27 @@ rules:
       name, an easily guessed credential.
     remediation: "Use a password unrelated to the username or database name."
 
-  # ------------------------------ GROUP: files ------------------------------
-  - id: OJS-CFG-FILES-001
+  - id: OJS-CFG-DB-003
+    name: "Database debug mode enabled"
+    module: config
+    cwe: CWE-209
+    owasp: "A05:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: database
+      key: debug
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `debug` is On in [database]. SQL queries and errors are logged or
+      displayed, leaking internal structure.
+    remediation: "Set `debug = Off` in [database] for production."
+
+  # ============================== GROUP: files ==============================
+  - id: OJS-CFG-FILE-001
     name: "files_dir located inside the web root"
     module: config
     cwe: CWE-552
@@ -733,7 +598,26 @@ rules:
       Move `files_dir` to a directory outside the web root (e.g. /var/ojs/files)
       that the web server will not serve.
 
-  - id: OJS-CFG-FILES-002
+  - id: OJS-CFG-FILE-002
+    name: "Insecure umask"
+    module: config
+    cwe: CWE-732
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: enum_directive
+      section: files
+      key: umask
+      secure_values: ["0027", "0077", "027", "077"]
+      default_when_absent: "0022"
+    description: >-
+      `umask` is set to a permissive value (e.g. 0022) that creates
+      world-readable files. Submission files may be readable by other
+      users on the server.
+    remediation: "Set `umask = 0027` or `0077` to restrict file permissions."
+
+  - id: OJS-CFG-FILE-003
     name: "disable_path_info not enabled"
     module: config
     cwe: CWE-16
@@ -748,11 +632,162 @@ rules:
       default_when_absent: "Off"
     description: >-
       `disable_path_info` is Off. On some server configurations PATH_INFO URLs
-      can bypass front-controller routing and access controls; OJS recommends
-      disabling it unless the server is known to handle it safely.
+      can bypass front-controller routing and access controls.
     remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
 
-  # ------------------------------- Nginx ------------------------------------
+  - id: OJS-CFG-FILE-004
+    name: "config.inc.php missing PHP exit guard"
+    module: config
+    cwe: CWE-538
+    owasp: "A05:2021"
+    severity: CRITICAL
+    pattern_type: builtin
+    params:
+      check: guard_line
+      guard_tokens: ["<?php", "exit"]
+      scan_lines: 3
+    description: >-
+      config.inc.php should begin with a `;<\?php exit; ?>` guard so that if the
+      web server ever serves the file as plain text or executes it as PHP, the
+      database credentials and secrets are not disclosed. The guard is missing.
+    remediation: >-
+      Add `;<\?php exit; ?>` as the very first line of config.inc.php and keep the
+      file outside the web root where possible.
+
+  # ============================== GROUP: email ==============================
+  - id: OJS-CFG-EMAIL-001
+    name: "SMTP certificate verification suppressed"
+    module: config
+    cwe: CWE-295
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: email
+      key: smtp_suppress_cert_check
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `smtp_suppress_cert_check` is On, disabling TLS certificate verification
+      for SMTP, enabling MITM attacks on email transport.
+    remediation: "Set `smtp_suppress_cert_check = Off` (or leave commented)."
+
+  - id: OJS-CFG-EMAIL-002
+    name: "Email validation not required before login"
+    module: config
+    cwe: CWE-799
+    owasp: "A04:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: email
+      key: require_validation
+      secure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `require_validation` is Off. Users can log in without validating their
+      email, facilitating spam bot registration.
+    remediation: "Set `require_validation = On` to require email verification."
+
+  # ============================== GROUP: captcha ============================
+  - id: OJS-CFG-CAP-001
+    name: "No CAPTCHA engine enabled"
+    module: config
+    cwe: CWE-799
+    owasp: "A04:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: captcha_engine
+      section: captcha
+    description: >-
+      Neither reCAPTCHA nor ALTCHA is enabled, so there is no bot protection
+      on registration/login forms.
+    remediation: >-
+      Enable ALTCHA (`altcha = on; altcha_on_register = on`) or reCAPTCHA
+      with valid keys in [captcha].
+
+  # ============================== GROUP: debug ==============================
+  - id: OJS-CFG-DBG-001
+    name: "show_stacktrace enabled in production"
+    module: config
+    cwe: CWE-209
+    owasp: "A05:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: debug
+      key: show_stacktrace
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `show_stacktrace` is On, exposing file paths and stack frames in error
+      output to end users, aiding reconnaissance.
+    remediation: "Set `show_stacktrace = Off` in production."
+
+  - id: OJS-CFG-DBG-002
+    name: "display_errors enabled in production"
+    module: config
+    cwe: CWE-209
+    owasp: "A05:2021"
+    severity: HIGH
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: debug
+      key: display_errors
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `display_errors` is On, exposing PHP error messages with internal
+      paths and structures to end users.
+    remediation: "Set `display_errors = Off` in production."
+
+  - id: OJS-CFG-DBG-003
+    name: "Deprecation warnings enabled in production"
+    module: config
+    cwe: CWE-209
+    owasp: "A05:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: debug
+      key: deprecation_warnings
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `deprecation_warnings` is On, displaying deprecation notices that
+      leak internal code structure.
+    remediation: "Set `deprecation_warnings = Off` in production."
+
+  - id: OJS-CFG-DBG-004
+    name: "Web service info logging enabled"
+    module: config
+    cwe: CWE-532
+    owasp: "A09:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: debug
+      key: log_web_service_info
+      secure_value: "Off"
+      insecure_value: "On"
+      default_when_absent: "Off"
+    description: >-
+      `log_web_service_info` is On, recording web service request data that
+      may contain sensitive information.
+    remediation: "Set `log_web_service_info = Off` unless actively debugging."
+
+  # ============================== Nginx ======================================
   - id: OJS-CFG-NGX-001
     name: "PHP execution not blocked in upload directory"
     module: config

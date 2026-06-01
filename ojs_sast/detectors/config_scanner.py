@@ -1,8 +1,10 @@
 """Configuration scanner for ``config.inc.php`` and Nginx site configs.
 
 Parses the OJS INI-style ``config.inc.php`` (``[section]`` headers, ``key = value``
-pairs, ``;``/``#`` comments, a leading ``;<?php exit; ?>`` guard) and evaluates
-the OJS-CFG-* rules. Nginx configs are scanned with targeted regexes.
+pairs, ``;``/``#`` comments, a leading ``;<​?php exit; ?>`` guard) and evaluates
+the OJS-CFG-* rules.  Nginx configs are scanned with targeted regexes.
+
+Aligned to the OJS config SAST ground-truth dataset (30+ check IDs).
 """
 
 from __future__ import annotations
@@ -165,6 +167,7 @@ class ConfigScanner:
             **kw,
         )
 
+    # -- guard_line -------------------------------------------------------- #
     def _check_guard_line(self, rule, text, sections, rel) -> List[Finding]:
         tokens = [t.lower() for t in rule.params.get("guard_tokens", ["<?php", "exit"])]
         n = int(rule.params.get("scan_lines", 3))
@@ -174,6 +177,7 @@ class ConfigScanner:
         return [self._finding(rule, rel,
                               "The leading ';<?php exit; ?>' guard is missing from config.inc.php.")]
 
+    # -- value_strength ---------------------------------------------------- #
     def _check_value_strength(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "security")
         key = rule.params.get("key")
@@ -191,6 +195,7 @@ class ConfigScanner:
                                   f"{min_len} are recommended.")]
         return []
 
+    # -- allowed_hosts ----------------------------------------------------- #
     def _check_allowed_hosts(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "general")
         key = rule.params.get("key", "allowed_hosts")
@@ -205,6 +210,7 @@ class ConfigScanner:
                                   f"Host headers.")]
         return []
 
+    # -- bool_directive ---------------------------------------------------- #
     def _check_bool_directive(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "general")
         key = rule.params.get("key")
@@ -224,6 +230,7 @@ class ConfigScanner:
                                   f"'{key}' is '{value}'; should be '{secure}'.")]
         return []
 
+    # -- enum_directive ---------------------------------------------------- #
     def _check_enum_directive(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "general")
         key = rule.params.get("key")
@@ -238,27 +245,102 @@ class ConfigScanner:
                               f"'{key}' is '{value}'; expected one of "
                               f"{sorted(rule.params.get('secure_values', []))}.")]
 
-    def _absent(self, rule, key, rel, secure_value, secure_set=None) -> List[Finding]:
-        """Handle an absent directive, honoring secure-by-default versions."""
+    # -- integer_threshold ------------------------------------------------- #
+    def _check_integer_threshold(self, rule, text, sections, rel) -> List[Finding]:
+        section = rule.params.get("section", "general")
+        key = rule.params.get("key")
+        operator = rule.params.get("operator", "<=")
+        threshold = int(rule.params.get("threshold", 0))
         default = rule.params.get("default_when_absent")
-        is_secure_default = False
-        if default is not None:
-            if secure_set is not None:
-                is_secure_default = str(default).lower() in secure_set
-            elif secure_value is not None:
-                is_secure_default = _bool_equal(str(default), str(secure_value))
-        if is_secure_default:
-            absent_sev = rule.params.get("absent_severity")
-            if not absent_sev:
-                return []
-            since = rule.params.get("default_since")
-            note = f" (default '{default}' since OJS {since})" if since else f" (default '{default}')"
-            return [self._finding(rule, rel,
-                                  f"'{key}' is not set; relying on the secure default{note}.",
-                                  severity=Severity.from_str(absent_sev))]
-        return [self._finding(rule, rel,
-                              f"'{key}' is not set; the default '{default}' is insecure.")]
+        warn_sev = rule.params.get("warn_severity", "low")
 
+        value = get_value(sections, section, key)
+        if value is None:
+            if default is not None:
+                value = str(default)
+            else:
+                return [self._finding(rule, rel, f"'{key}' is not set in [{section}].",
+                                      severity=Severity.from_str(warn_sev))]
+
+        try:
+            val = int(value.strip())
+        except (ValueError, AttributeError):
+            return [self._finding(rule, rel, f"'{key}' has non-numeric value '{value}'.")]
+
+        passed = False
+        if operator == "<=":
+            passed = val <= threshold
+        elif operator == "<":
+            passed = val < threshold
+        elif operator == ">":
+            passed = val > threshold
+        elif operator == ">=":
+            passed = val >= threshold
+        elif operator == "==":
+            passed = val == threshold
+
+        if passed:
+            return []
+        return [self._finding(rule, rel,
+                              f"'{key}' is {val}; expected {operator} {threshold}.",
+                              severity=Severity.from_str(warn_sev))]
+
+    # -- base_url_scheme --------------------------------------------------- #
+    def _check_base_url_scheme(self, rule, text, sections, rel) -> List[Finding]:
+        section = rule.params.get("section", "general")
+        key = rule.params.get("key", "base_url")
+        value = get_value(sections, section, key)
+        findings: List[Finding] = []
+
+        if value is None:
+            return [self._finding(rule, rel, f"'{key}' is not set.")]
+
+        # Check placeholder values.
+        placeholders = rule.params.get("placeholder_values", [])
+        if value.strip().lower() in [p.lower() for p in placeholders]:
+            findings.append(self._finding(rule, rel,
+                                          f"'{key}' is still the default placeholder ('{value}')."))
+
+        # Check scheme.
+        required = rule.params.get("required_scheme", "https")
+        if value.strip().lower().startswith("http://"):
+            findings.append(self._finding(rule, rel,
+                                          f"'{key}' uses HTTP instead of HTTPS."))
+
+        return findings
+
+    # -- allowed_html_tags ------------------------------------------------- #
+    def _check_allowed_html_tags(self, rule, text, sections, rel) -> List[Finding]:
+        section = rule.params.get("section", "security")
+        key = rule.params.get("key", "allowed_html")
+        value = get_value(sections, section, key)
+        if value is None:
+            return []  # Default is safe.
+
+        dangerous = rule.params.get("dangerous_patterns", [])
+        found = []
+        for pat in dangerous:
+            if re.search(pat, value, re.IGNORECASE):
+                found.append(pat)
+
+        if found:
+            return [self._finding(rule, rel,
+                                  f"'allowed_html' contains dangerous tag(s): {', '.join(found)}.")]
+        return []
+
+    # -- captcha_engine ---------------------------------------------------- #
+    def _check_captcha_engine(self, rule, text, sections, rel) -> List[Finding]:
+        captcha_sec = sections.get("captcha", {})
+        recaptcha = captcha_sec.get("recaptcha", "off").strip().lower()
+        altcha = captcha_sec.get("altcha", "off").strip().lower()
+
+        if recaptcha in _TRUE_WORDS or altcha in _TRUE_WORDS:
+            return []
+        return [self._finding(rule, rel,
+                              "Neither reCAPTCHA nor ALTCHA is enabled in [captcha]. "
+                              "No bot protection on registration/login.")]
+
+    # -- breached_password ------------------------------------------------- #
     def _check_breached_password(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "database")
         key = rule.params.get("key", "password")
@@ -271,6 +353,7 @@ class ConfigScanner:
                                   "The database password matches a common/breached password.")]
         return []
 
+    # -- password_equals_identity ------------------------------------------ #
     def _check_password_equals_identity(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "database")
         key = rule.params.get("key", "password")
@@ -285,6 +368,7 @@ class ConfigScanner:
                                       f"('{other}').")]
         return []
 
+    # -- files_dir_webroot ------------------------------------------------- #
     def _check_files_dir_webroot(self, rule, text, sections, rel) -> List[Finding]:
         section = rule.params.get("section", "files")
         key = rule.params.get("key", "files_dir")
@@ -307,6 +391,28 @@ class ConfigScanner:
             except OSError:  # pragma: no cover
                 pass
         return []
+
+    # -- absent directive helper ------------------------------------------- #
+    def _absent(self, rule, key, rel, secure_value, secure_set=None) -> List[Finding]:
+        """Handle an absent directive, honoring secure-by-default versions."""
+        default = rule.params.get("default_when_absent")
+        is_secure_default = False
+        if default is not None:
+            if secure_set is not None:
+                is_secure_default = str(default).lower() in secure_set
+            elif secure_value is not None:
+                is_secure_default = _bool_equal(str(default), str(secure_value))
+        if is_secure_default:
+            absent_sev = rule.params.get("absent_severity")
+            if not absent_sev:
+                return []
+            since = rule.params.get("default_since")
+            note = f" (default '{default}' since OJS {since})" if since else f" (default '{default}')"
+            return [self._finding(rule, rel,
+                                  f"'{key}' is not set; relying on the secure default{note}.",
+                                  severity=Severity.from_str(absent_sev))]
+        return [self._finding(rule, rel,
+                              f"'{key}' is not set; the default '{default}' is insecure.")]
 
     # -- Nginx --------------------------------------------------------------- #
     def _load_nginx(self, nginx_paths: Optional[List[Path]]) -> Tuple[Optional[str], str]:
