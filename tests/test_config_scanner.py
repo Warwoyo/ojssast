@@ -56,7 +56,7 @@ def test_insecure_config_findings(ruleset, tmp_path):
 def test_hardened_config_clean(ruleset):
     cfg = FIXTURES / "config" / "hardened_config.inc.php"
     sc = ConfigScanner(ruleset, ojs_path="/var/www/ojs")
-    assert sc.scan(cfg) == []
+    assert [f for f in sc.scan(cfg) if not f.extra.get("do_not_flag")] == []
 
 
 def test_guard_line_present_not_flagged(ruleset, tmp_path):
@@ -284,12 +284,15 @@ def test_regression_public_user_dir_size(ruleset, tmp_path):
 
 
 def test_regression_informational_rules(ruleset, tmp_path):
-    """Test show_upgrade_warning and enable_beacon do not generate security findings."""
+    """Test show_upgrade_warning and enable_beacon emit INFO findings with do_not_flag."""
     cfg = tmp_path / "c.inc.php"
     cfg.write_text(";<?php exit; ?>\n[general]\nshow_upgrade_warning = On\nenable_beacon = Off\n")
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
     findings = sc.scan(cfg)
-    ids = _ids(findings)
-    # The findings should not be emitted (since reporting is false)
-    assert "OJS-CFG-GEN-009" not in ids
-    assert "OJS-CFG-GEN-010" not in ids
+    by = _by_id(findings)
+    assert "OJS-CFG-GEN-009" in by
+    assert "OJS-CFG-GEN-010" in by
+    assert by["OJS-CFG-GEN-009"].severity.value == "INFO"
+    assert by["OJS-CFG-GEN-009"].extra.get("do_not_flag") is True
+    assert by["OJS-CFG-GEN-010"].severity.value == "INFO"
+    assert by["OJS-CFG-GEN-010"].extra.get("do_not_flag") is True

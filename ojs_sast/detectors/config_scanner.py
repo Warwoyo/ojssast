@@ -471,7 +471,15 @@ class ConfigScanner:
 
     # -- informational_directive ------------------------------------------- #
     def _check_informational_directive(self, rule, text, sections, rel) -> List[Finding]:
-        return []
+        section = rule.params.get("section", "general")
+        key = rule.params.get("key")
+        val = get_value(sections, section, key)
+        snippet = self._snippet_for_key(text, section, key) if val is not None else self._snippet_missing_key(text, section, key)
+        
+        detail = f"Informational: '{key}' in [{section}] is set to '{val}'." if val is not None else f"Informational: '{key}' is not set in [{section}]."
+        
+        extra = {"do_not_flag": True, "informational": True}
+        return [self._finding(rule, rel, detail, severity=Severity.INFO, code_snippet=snippet, extra=extra)]
 
     # -- default_db_credentials --------------------------------------------- #
     def _check_default_db_credentials(self, rule, text, sections, rel) -> List[Finding]:

@@ -69,6 +69,7 @@ def is_version_affected(
     if not affected_specs:
         return True, "no affected-version constraints defined"
 
+    patch_info = ""
     # Check patched versions first — branch aware
     if patched_specs:
         same_branch_patches = []
@@ -88,10 +89,10 @@ def is_version_affected(
                     other_str = f"; ignored patched specs from other branches: {', '.join(other_branch_patches)}" if other_branch_patches else ""
                     return False, f"detected {detected} >= patched {spec_clean} on same branch{other_str}"
             
-            # If not safe and same-branch patch exists, then it is affected
+            # If not safe and same-branch patch exists, keep track but verify with affected_specs
             other_str = f"; ignored patched specs from other branches: {', '.join(other_branch_patches)}" if other_branch_patches else ""
             below_spec = same_branch_patches[0][0]
-            return True, f"detected {detected} is below patched {below_spec} on same branch{other_str}"
+            patch_info = f" (below patched {below_spec} on same branch{other_str})"
 
     raw_det = parse_version_raw(detected)
 
@@ -100,28 +101,28 @@ def is_version_affected(
         if spec.startswith("<="):
             bound = parse_version(spec[2:])
             if det <= bound:
-                return True, f"detected {detected} <= {spec[2:]}"
+                return True, f"detected {detected} <= {spec[2:]}{patch_info}"
         elif spec.startswith("<"):
             bound = parse_version(spec[1:])
             if det < bound:
-                return True, f"detected {detected} < {spec[1:]}"
+                return True, f"detected {detected} < {spec[1:]}{patch_info}"
         elif spec.startswith(">="):
             bound = parse_version(spec[2:])
             if det >= bound:
-                return True, f"detected {detected} >= {spec[2:]}"
+                return True, f"detected {detected} >= {spec[2:]}{patch_info}"
         elif spec.startswith(">"):
             bound = parse_version(spec[1:])
             if det > bound:
-                return True, f"detected {detected} > {spec[1:]}"
+                return True, f"detected {detected} > {spec[1:]}{patch_info}"
         elif spec.startswith("==") or spec.startswith("="):
             exact = parse_version(spec.lstrip("="))
             if det == exact:
-                return True, f"detected {detected} == {spec.lstrip('=')}"
+                return True, f"detected {detected} == {spec.lstrip('=')}{patch_info}"
         else:
             # Prefix match: "3.3.0" matches any 3.3.0-x
             raw_spec = parse_version_raw(spec)
             if raw_det[:len(raw_spec)] == raw_spec:
-                return True, f"detected {detected} matches prefix {spec}"
+                return True, f"detected {detected} matches prefix {spec}{patch_info}"
 
     return False, f"detected {detected} is not in affected ranges {affected_specs}"
 

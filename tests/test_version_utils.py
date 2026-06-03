@@ -35,3 +35,12 @@ def test_reason_string():
     assert is_aff is True
     assert "below patched 3.4.0-10" in reason
     assert "ignored patched specs from other branches: 3.3.0-22, 3.5.0-2" in reason
+
+
+def test_negative_same_branch_patch_not_in_affected_range():
+    # detected is 3.4.0-7, which is below same-branch patch 3.4.0-10.
+    # But affected range is <=3.3.0-21 (not covering 3.4 branch).
+    # It must return False (not affected / safe).
+    is_aff, reason = is_version_affected("3.4.0-7", ["<=3.3.0-21"], ["3.4.0-10"])
+    assert is_aff is False
+

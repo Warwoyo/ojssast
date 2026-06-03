@@ -24,7 +24,6 @@ rules:
       secure_value: "On"
       insecure_value: "Off"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `installed` is Off, meaning the OJS installer/setup wizard is still
       accessible. An attacker could re-initialize the database and take over.
@@ -45,7 +44,6 @@ rules:
       placeholder_values:
         - "https://pkp.sfu.ca/ojs"
         - "http://pkp.sfu.ca/ojs"
-      ground_truth: false
     description: >-
       `base_url` uses HTTP or is still the default placeholder. Canonical
       URLs should use HTTPS for transport security.
@@ -66,7 +64,6 @@ rules:
       section: general
       key: allowed_hosts
       insecure_values: ["", "*"]
-      ground_truth: false
     description: >-
       `allowed_hosts` is empty or a wildcard, so OJS trusts the inbound Host
       header. This enables Host header injection: poisoned password-reset links,
@@ -89,7 +86,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `trust_x_forwarded_for` is On. Unless behind a trusted reverse proxy,
       this allows IP spoofing for session_check_ip bypass and log tampering.
@@ -111,7 +107,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "On"
-      ground_truth: false
     description: >-
       `allow_url_fopen` is On. This enables fopen-family functions to access
       remote URLs, which can be abused in SSRF scenarios.
@@ -132,7 +127,6 @@ rules:
       threshold: 43200
       default_when_absent: "0"
       warn_severity: low
-      ground_truth: false
     description: >-
       `session_lifetime` exceeds 12 hours (43200 seconds), allowing sessions
       to persist for extended periods if not closed.
@@ -153,7 +147,6 @@ rules:
       default_when_absent: "Lax"
       absent_severity: INFO
       default_since: "3.3.0"
-      ground_truth: false
     description: >-
       `session_samesite` is None or empty, so the session cookie is sent on
       cross-site requests, weakening CSRF protection.
@@ -173,7 +166,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `sandbox` is On. Sandbox mode restricts certain operations but may
       indicate a non-production configuration.
@@ -188,7 +180,6 @@ rules:
       check: informational_directive
       section: general
       key: show_upgrade_warning
-      reporting: false
     description: >-
       Whether upgrade warnings are displayed to the user.
     remediation: "None required."
@@ -202,7 +193,6 @@ rules:
       check: informational_directive
       section: general
       key: enable_beacon
-      reporting: false
     description: >-
       Enable PKP beacon.
     remediation: "None required."
@@ -241,7 +231,6 @@ rules:
       key: force_ssl
       secure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `force_ssl` is Off, so OJS does not redirect traffic to HTTPS. Session
       cookies and credentials can be transmitted in cleartext.
@@ -260,7 +249,6 @@ rules:
       key: force_login_ssl
       secure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `force_login_ssl` is Off. Login credentials may be submitted in
       cleartext if the login page is not forced to HTTPS.
@@ -281,7 +269,6 @@ rules:
       secure_value: "On"
       insecure_value: "Off"
       default_when_absent: "On"
-      ground_truth: false
     description: >-
       `session_check_ip` is Off. Session hijacking is easier when the session
       is not bound to the client IP address.
@@ -300,7 +287,6 @@ rules:
       key: encryption
       secure_values: ["sha1"]
       default_when_absent: "sha1"
-      ground_truth: false
     description: >-
       `encryption` is set to md5 or an unsupported value. PKP requires sha1
       (legacy migration hash; modern hashing done internally).
@@ -319,7 +305,6 @@ rules:
       key: session_expire_on_close
       secure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `session_expire_on_close` is Off. Sessions persist after browser close,
       increasing risk on shared devices.
@@ -343,7 +328,6 @@ rules:
         - ""
         - "secret"
         - "YouMustSetASecretKeyHere!!"
-      ground_truth: false
     description: >-
       The `salt` is empty, set to a known default placeholder, or shorter than
       24 characters. The salt protects password-reset hashes, API keys and email
@@ -365,7 +349,6 @@ rules:
       key: api_key_secret
       min_length: 24
       default_values: ["", "changeme", "YOUR_API_KEY_SECRET"]
-      ground_truth: false
     description: >-
       `api_key_secret` is empty or set to a default. This secret signs API tokens;
       a predictable value lets attackers forge or decrypt API credentials.
@@ -387,7 +370,6 @@ rules:
       threshold: 7200
       default_when_absent: "7200"
       warn_severity: low
-      ground_truth: false
     description: >-
       `reset_seconds` exceeds 7200 (2 hours), giving attackers a wider window
       to abuse password-reset tokens.
@@ -406,7 +388,6 @@ rules:
       key: allow_plugin_install
       secure_values: ["gallery_only", "upgrade_only", "off"]
       default_when_absent: "on"
-      ground_truth: false
     description: >-
       `allow_plugin_install` is 'on' (or absent, defaulting to 'on'),
       allowing arbitrary plugin uploads. If a manager account is compromised
@@ -429,7 +410,6 @@ rules:
       threshold: 0
       default_when_absent: "0"
       warn_severity: medium
-      ground_truth: false
     description: >-
       `password_timeout` is 0 (or absent), so admin sessions never require
       re-authentication for sensitive operations.
@@ -449,7 +429,6 @@ rules:
       secure_values: ["aes-256-gcm", "aes-256-cbc"]
       default_when_absent: "aes-256-cbc"
       absent_severity: INFO
-      ground_truth: false
     description: >-
       `cipher` uses a 128-bit key or is not set. 256-bit AES is recommended.
     remediation: "Set `cipher = aes-256-gcm` for authenticated encryption."
@@ -469,7 +448,6 @@ rules:
       insecure_value: "Off"
       default_when_absent: "On"
       absent_severity: INFO
-      ground_truth: false
     description: >-
       `cookie_encryption` is Off. Cookie values are transmitted unencrypted.
     remediation: "Set `cookie_encryption = On` (requires valid app_key)."
@@ -487,7 +465,6 @@ rules:
       key: app_key
       min_length: 24
       default_values: ["", '""']
-      ground_truth: false
     description: >-
       `app_key` is empty or too short. This key is required for cookie
       encryption and internal cryptographic operations in OJS 3.5+.
@@ -512,7 +489,6 @@ rules:
         - "object"
         - "embed"
         - "style"
-      ground_truth: false
     description: >-
       The `allowed_html` whitelist contains potentially dangerous tags
       (script, iframe, object, embed, style) that could enable XSS.
@@ -637,7 +613,6 @@ rules:
       check: files_dir_webroot
       section: files
       key: files_dir
-      ground_truth: false
     description: >-
       `files_dir` (private uploads: submissions, reviews) resolves to a path
       inside the OJS web root, so uploaded files may be directly downloadable or
@@ -659,7 +634,6 @@ rules:
       key: umask
       secure_values: ["0027", "0077", "027", "077"]
       default_when_absent: "0022"
-      ground_truth: false
     description: >-
       `umask` is set to a permissive value (e.g. 0022) that creates
       world-readable files. Submission files may be readable by other
@@ -697,7 +671,6 @@ rules:
       check: guard_line
       guard_tokens: ["<?php", "exit"]
       scan_lines: 3
-      ground_truth: false
     description: >-
       config.inc.php should begin with a `;<\?php exit; ?>` guard so that if the
       web server ever serves the file as plain text or executes it as PHP, the
@@ -721,7 +694,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `smtp_suppress_cert_check` is On, disabling TLS certificate verification
       for SMTP, enabling MITM attacks on email transport.
@@ -740,7 +712,6 @@ rules:
       key: require_validation
       secure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `require_validation` is Off. Users can log in without validating their
       email, facilitating spam bot registration.
@@ -757,7 +728,6 @@ rules:
     params:
       check: captcha_engine
       section: captcha
-      ground_truth: false
     description: >-
       Neither reCAPTCHA nor ALTCHA is enabled, so there is no bot protection
       on registration/login forms.
@@ -780,7 +750,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `show_stacktrace` is On, exposing file paths and stack frames in error
       output to end users, aiding reconnaissance.
@@ -800,7 +769,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `display_errors` is On, exposing PHP error messages with internal
       paths and structures to end users.
@@ -820,7 +788,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `deprecation_warnings` is On, displaying deprecation notices that
       leak internal code structure.
@@ -840,7 +807,6 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
-      ground_truth: false
     description: >-
       `log_web_service_info` is On, recording web service request data that
       may contain sensitive information.
