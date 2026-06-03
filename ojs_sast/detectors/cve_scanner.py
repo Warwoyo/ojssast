@@ -30,7 +30,7 @@ from ..helpers.smarty_utils import (
     find_translate_tag,
 )
 from ..helpers.version_utils import is_version_affected
-from ..models import Finding, Rule, Severity
+from ..models import Finding, Rule, Severity, resolve_rule_metadata
 from ..ruleset.loader import Ruleset
 
 logger = logging.getLogger("ojs_sast.cve_scanner")
@@ -185,6 +185,7 @@ class _BaseDetector:
             owasp=rule.owasp,
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
+            **resolve_rule_metadata(rule.id, rule.params),
             code_snippet=code_snip,
             confidence=confidence,
             matched_source=matched_source,
