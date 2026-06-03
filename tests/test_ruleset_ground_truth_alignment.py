@@ -1,7 +1,15 @@
-import pytest
-from ojs_sast.ruleset.loader import load_ruleset
-
 # All 39 Ground Truth OJS Configuration Checks
+CONFIG_GT_IDS = {
+    *(f"OJS-CFG-GEN-{i:03d}" for i in range(1, 12)),
+    *(f"OJS-CFG-SEC-{i:03d}" for i in range(1, 15)),
+    *(f"OJS-CFG-DB-{i:03d}" for i in range(1, 4)),
+    *(f"OJS-CFG-FILE-{i:03d}" for i in range(1, 5)),
+    "OJS-CFG-EMAIL-001",
+    "OJS-CFG-EMAIL-002",
+    "OJS-CFG-CAP-001",
+    *(f"OJS-CFG-DBG-{i:03d}" for i in range(1, 5)),
+}
+
 EXPECTED_CONFIG_GT = {
     # general
     "OJS-CFG-GEN-001": ("general", "installed"),
@@ -51,16 +59,29 @@ EXPECTED_CONFIG_GT = {
     "OJS-CFG-DBG-004": ("debug", "log_web_service_info"),
 }
 
+EXTENSION_CONFIG_PREFIXES = ("OJS-CFG-NGX-", "OJS-CFG-EXT-")
+GENERIC_SOURCE_NON_GT_IDS = {"RULE-SRC-010", "RULE-SRC-011", "RULE-SRC-012"}
+CVE_GT_IDS = {f"CVE-SRC-{i:03d}" for i in range(1, 13)}
+
+
+def test_all_config_ground_truth_ids_exist(ruleset):
+    config_rules = {rule.id: rule for rule in ruleset.by_module("config")}
+
+    assert len(CONFIG_GT_IDS) == 39
+    assert CONFIG_GT_IDS == set(EXPECTED_CONFIG_GT)
+    missing_ids = sorted(CONFIG_GT_IDS - set(config_rules))
+    assert not missing_ids, f"Missing config ground-truth rules: {missing_ids}"
+
 
 def test_ruleset_ground_truth_alignment(ruleset):
     config_rules = {r.id: r for r in ruleset.by_module("config")}
 
-    # Assert that all 39 Ground Truth rules are present and correct
+    # Assert that all 39 Ground Truth rules are present and section/key aligned.
     for rid, (expected_sec, expected_key) in EXPECTED_CONFIG_GT.items():
         assert rid in config_rules, f"Rule {rid} is missing from the ruleset"
         rule = config_rules[rid]
 
-        # Check section
+        # Check section mapping.
         if rid == "OJS-CFG-FILE-004":
             # exit guard line check runs on the file header, so section parameter is absent/unused
             assert rule.params.get("section") is None
@@ -73,7 +94,7 @@ def test_ruleset_ground_truth_alignment(ruleset):
                 f"Rule {rid} expected section '{expected_sec}', got '{actual_sec}'"
             )
 
-        # Check key mapping
+        # Check key/check mapping.
         if rid == "OJS-CFG-DB-001":
             assert rule.params.get("check") == "default_db_credentials"
         elif rid == "OJS-CFG-DB-003":
@@ -88,18 +109,54 @@ def test_ruleset_ground_truth_alignment(ruleset):
                 f"Rule {rid} expected key '{expected_key}', got '{actual_key}'"
             )
 
-    # Check extension rules (those not in the 39 GT rules list)
-    for rule in config_rules.values():
-        if rule.id not in EXPECTED_CONFIG_GT:
-            # Allowlist OJS-CFG-NGX-* and OJS-CFG-EXT-* as non-GT extensions
-            assert rule.id.startswith("OJS-CFG-NGX-") or rule.id.startswith("OJS-CFG-EXT-"), (
-                f"Rule {rule.id} is not in the ground truth set and does not follow the extension ID prefix"
-            )
-            assert rule.params.get("ground_truth") is False, (
-                f"Rule {rule.id} is an extension rule but is not marked as extension (ground_truth: false)"
-            )
-        else:
-            # GT rules must not be marked as extension
-            assert rule.params.get("ground_truth") is not False, (
-                f"Ground truth rule {rule.id} must not be marked as extension"
-            )
+
+def test_config_ground_truth_rules_not_marked_extension(ruleset):
+    for rid in CONFIG_GT_IDS:
+        rule = ruleset.get(rid)
+        assert rule is not None, f"Rule {rid} is missing from the ruleset"
+        assert rule.params.get("ground_truth") is not False, (
+            f"Ground truth rule {rid} must not be marked as an extension/non-ground-truth rule"
+        )
+
+
+def test_extension_rules_marked_non_ground_truth(ruleset):
+    config_rules = {rule.id: rule for rule in ruleset.by_module("config")}
+    extension_rules = {
+        rid: rule
+        for rid, rule in config_rules.items()
+        if rid.startswith(EXTENSION_CONFIG_PREFIXES)
+    }
+    unexpected_non_gt_ids = sorted(
+        rid
+        for rid in set(config_rules) - CONFIG_GT_IDS
+        if not rid.startswith(EXTENSION_CONFIG_PREFIXES)
+    )
+
+    assert not unexpected_non_gt_ids, (
+        "Config rules outside the 39 ground-truth IDs must use an extension prefix: "
+        f"{unexpected_non_gt_ids}"
+    )
+    assert extension_rules, "Expected at least one OJS-CFG-NGX-* or OJS-CFG-EXT-* extension rule"
+    for rid, rule in extension_rules.items():
+        assert rid not in CONFIG_GT_IDS
+        assert rule.params.get("ground_truth") is False, (
+            f"Extension config rule {rid} must be marked ground_truth: false"
+        )
+
+
+def test_generic_source_rules_marked_non_ground_truth(ruleset):
+    for rid in GENERIC_SOURCE_NON_GT_IDS:
+        rule = ruleset.get(rid)
+        assert rule is not None, f"Rule {rid} is missing from the ruleset"
+        assert rule.params.get("ground_truth") is False, (
+            f"Generic source rule {rid} must be marked ground_truth: false"
+        )
+
+
+def test_cve_rules_are_ground_truth(ruleset):
+    for rid in CVE_GT_IDS:
+        rule = ruleset.get(rid)
+        assert rule is not None, f"Rule {rid} is missing from the ruleset"
+        assert rule.params.get("ground_truth") is not False, (
+            f"CVE rule {rid} must remain in the ground-truth ruleset"
+        )
