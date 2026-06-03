@@ -43,6 +43,8 @@ def mock_ojs(tmp_path):
                 root / "pages" / "issue" / "IssueHandler.inc.php")
     shutil.copy(FIXTURES / "vulnerable_php" / "sqli_sample.php",
                 root / "classes" / "core" / "SubmissionSearchDAO.inc.php")
+    shutil.copy(FIXTURES / "vulnerable_php" / "widget.js",
+                root / "classes" / "core" / "widget.js")
 
     # files_dir = "files" (relative -> inside webroot) holds a webshell.
     files_dir = root / "files"

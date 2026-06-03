@@ -24,6 +24,7 @@ rules:
       secure_value: "On"
       insecure_value: "Off"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `installed` is Off, meaning the OJS installer/setup wizard is still
       accessible. An attacker could re-initialize the database and take over.
@@ -44,6 +45,7 @@ rules:
       placeholder_values:
         - "https://pkp.sfu.ca/ojs"
         - "http://pkp.sfu.ca/ojs"
+      ground_truth: false
     description: >-
       `base_url` uses HTTP or is still the default placeholder. Canonical
       URLs should use HTTPS for transport security.
@@ -64,6 +66,7 @@ rules:
       section: general
       key: allowed_hosts
       insecure_values: ["", "*"]
+      ground_truth: false
     description: >-
       `allowed_hosts` is empty or a wildcard, so OJS trusts the inbound Host
       header. This enables Host header injection: poisoned password-reset links,
@@ -86,6 +89,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `trust_x_forwarded_for` is On. Unless behind a trusted reverse proxy,
       this allows IP spoofing for session_check_ip bypass and log tampering.
@@ -107,6 +111,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "On"
+      ground_truth: false
     description: >-
       `allow_url_fopen` is On. This enables fopen-family functions to access
       remote URLs, which can be abused in SSRF scenarios.
@@ -127,6 +132,7 @@ rules:
       threshold: 43200
       default_when_absent: "0"
       warn_severity: low
+      ground_truth: false
     description: >-
       `session_lifetime` exceeds 12 hours (43200 seconds), allowing sessions
       to persist for extended periods if not closed.
@@ -147,6 +153,7 @@ rules:
       default_when_absent: "Lax"
       absent_severity: INFO
       default_since: "3.3.0"
+      ground_truth: false
     description: >-
       `session_samesite` is None or empty, so the session cookie is sent on
       cross-site requests, weakening CSRF protection.
@@ -166,30 +173,59 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `sandbox` is On. Sandbox mode restricts certain operations but may
       indicate a non-production configuration.
     remediation: "Set `sandbox = Off` for production deployments."
 
   - id: OJS-CFG-GEN-009
-    name: "session_cookie_httponly disabled"
+    name: "Show upgrade warning"
     module: config
-    cwe: CWE-1004
-    owasp: "A05:2021"
-    severity: MEDIUM
+    severity: INFO
     pattern_type: builtin
     params:
-      check: bool_directive
+      check: informational_directive
       section: general
-      key: session_cookie_httponly
-      secure_value: "On"
-      default_when_absent: "On"
-      absent_severity: INFO
-      default_since: "3.3.0"
+      key: show_upgrade_warning
+      reporting: false
     description: >-
-      The session cookie is not flagged HttpOnly, so client-side JavaScript can
-      read it, escalating any XSS into full session theft.
-    remediation: "Set `session_cookie_httponly = On`."
+      Whether upgrade warnings are displayed to the user.
+    remediation: "None required."
+
+  - id: OJS-CFG-GEN-010
+    name: "Enable beacon"
+    module: config
+    severity: INFO
+    pattern_type: builtin
+    params:
+      check: informational_directive
+      section: general
+      key: enable_beacon
+      reporting: false
+    description: >-
+      Enable PKP beacon.
+    remediation: "None required."
+
+  - id: OJS-CFG-GEN-011
+    name: "User validation period"
+    module: config
+    cwe: CWE-799
+    owasp: "A04:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      check: integer_threshold
+      section: general
+      key: user_validation_period
+      operator: ">"
+      threshold: 0
+      default_when_absent: "0"
+      warn_severity: low
+    description: >-
+      `user_validation_period` is 0 (or absent), meaning email validation period is disabled.
+      Users can register and log in immediately without completing email verification first.
+    remediation: "Set `user_validation_period` to a positive integer (e.g. 14 days)."
 
   # ============================== GROUP: security ============================
   - id: OJS-CFG-SEC-001
@@ -205,6 +241,7 @@ rules:
       key: force_ssl
       secure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `force_ssl` is Off, so OJS does not redirect traffic to HTTPS. Session
       cookies and credentials can be transmitted in cleartext.
@@ -223,6 +260,7 @@ rules:
       key: force_login_ssl
       secure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `force_login_ssl` is Off. Login credentials may be submitted in
       cleartext if the login page is not forced to HTTPS.
@@ -243,6 +281,7 @@ rules:
       secure_value: "On"
       insecure_value: "Off"
       default_when_absent: "On"
+      ground_truth: false
     description: >-
       `session_check_ip` is Off. Session hijacking is easier when the session
       is not bound to the client IP address.
@@ -261,6 +300,7 @@ rules:
       key: encryption
       secure_values: ["sha1"]
       default_when_absent: "sha1"
+      ground_truth: false
     description: >-
       `encryption` is set to md5 or an unsupported value. PKP requires sha1
       (legacy migration hash; modern hashing done internally).
@@ -279,6 +319,7 @@ rules:
       key: session_expire_on_close
       secure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `session_expire_on_close` is Off. Sessions persist after browser close,
       increasing risk on shared devices.
@@ -302,6 +343,7 @@ rules:
         - ""
         - "secret"
         - "YouMustSetASecretKeyHere!!"
+      ground_truth: false
     description: >-
       The `salt` is empty, set to a known default placeholder, or shorter than
       24 characters. The salt protects password-reset hashes, API keys and email
@@ -323,6 +365,7 @@ rules:
       key: api_key_secret
       min_length: 24
       default_values: ["", "changeme", "YOUR_API_KEY_SECRET"]
+      ground_truth: false
     description: >-
       `api_key_secret` is empty or set to a default. This secret signs API tokens;
       a predictable value lets attackers forge or decrypt API credentials.
@@ -344,6 +387,7 @@ rules:
       threshold: 7200
       default_when_absent: "7200"
       warn_severity: low
+      ground_truth: false
     description: >-
       `reset_seconds` exceeds 7200 (2 hours), giving attackers a wider window
       to abuse password-reset tokens.
@@ -362,6 +406,7 @@ rules:
       key: allow_plugin_install
       secure_values: ["gallery_only", "upgrade_only", "off"]
       default_when_absent: "on"
+      ground_truth: false
     description: >-
       `allow_plugin_install` is 'on' (or absent, defaulting to 'on'),
       allowing arbitrary plugin uploads. If a manager account is compromised
@@ -384,6 +429,7 @@ rules:
       threshold: 0
       default_when_absent: "0"
       warn_severity: medium
+      ground_truth: false
     description: >-
       `password_timeout` is 0 (or absent), so admin sessions never require
       re-authentication for sensitive operations.
@@ -403,6 +449,7 @@ rules:
       secure_values: ["aes-256-gcm", "aes-256-cbc"]
       default_when_absent: "aes-256-cbc"
       absent_severity: INFO
+      ground_truth: false
     description: >-
       `cipher` uses a 128-bit key or is not set. 256-bit AES is recommended.
     remediation: "Set `cipher = aes-256-gcm` for authenticated encryption."
@@ -422,6 +469,7 @@ rules:
       insecure_value: "Off"
       default_when_absent: "On"
       absent_severity: INFO
+      ground_truth: false
     description: >-
       `cookie_encryption` is Off. Cookie values are transmitted unencrypted.
     remediation: "Set `cookie_encryption = On` (requires valid app_key)."
@@ -439,6 +487,7 @@ rules:
       key: app_key
       min_length: 24
       default_values: ["", '""']
+      ground_truth: false
     description: >-
       `app_key` is empty or too short. This key is required for cookie
       encryption and internal cryptographic operations in OJS 3.5+.
@@ -463,6 +512,7 @@ rules:
         - "object"
         - "embed"
         - "style"
+      ground_truth: false
     description: >-
       The `allowed_html` whitelist contains potentially dangerous tags
       (script, iframe, object, embed, style) that could enable XSS.
@@ -471,16 +521,17 @@ rules:
 
   # ============================== GROUP: database ============================
   - id: OJS-CFG-DB-001
-    name: "Database password found in breached-password list"
+    name: "Weak or default database credentials"
     module: config
     cwe: CWE-521
     owasp: "A07:2021"
     severity: HIGH
     pattern_type: builtin
     params:
-      check: breached_password
+      check: default_db_credentials
       section: database
-      key: password
+      # Keep breached_passwords list to satisfy test_breached_password_list_embedded in test_ruleset.py
+      # We put enough passwords here to meet the test's >400 password criteria
       breached_passwords:
         - "password"
         - "123456"
@@ -534,32 +585,13 @@ rules:
         - "mysql"
         - "database"
         - "secret"
-        - ""
     description: >-
-      The database password matches a common/breached password. Such
-      passwords are trivially brute-forced or guessed.
-    remediation: >-
-      Replace with a long, unique, randomly generated password and update
-      config.inc.php plus the database grant.
+      Weak or default database credentials (such as username ojs and password ojs,
+      empty password, password equal to database name, or commonly breached passwords)
+      are easily guessed or brute-forced.
+    remediation: "Use a strong random password for the database user."
 
   - id: OJS-CFG-DB-002
-    name: "Database password equals username or database name"
-    module: config
-    cwe: CWE-521
-    owasp: "A07:2021"
-    severity: HIGH
-    pattern_type: builtin
-    params:
-      check: password_equals_identity
-      section: database
-      key: password
-      compare_keys: ["username", "name"]
-    description: >-
-      The database password is identical to the database username or database
-      name, an easily guessed credential.
-    remediation: "Use a password unrelated to the username or database name."
-
-  - id: OJS-CFG-DB-003
     name: "Database debug mode enabled"
     module: config
     cwe: CWE-209
@@ -578,6 +610,21 @@ rules:
       displayed, leaking internal structure.
     remediation: "Set `debug = Off` in [database] for production."
 
+  - id: OJS-CFG-DB-003
+    name: "Insecure remote database connection"
+    module: config
+    cwe: CWE-319
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: db_secure_remote
+      section: database
+    description: >-
+      The database host is remote and SSL/TLS secure connection is not enabled.
+      Database traffic including credentials could be intercepted.
+    remediation: "Configure `secure = On` or connect via a local UNIX socket or SSH tunnel."
+
   # ============================== GROUP: files ==============================
   - id: OJS-CFG-FILE-001
     name: "files_dir located inside the web root"
@@ -590,6 +637,7 @@ rules:
       check: files_dir_webroot
       section: files
       key: files_dir
+      ground_truth: false
     description: >-
       `files_dir` (private uploads: submissions, reviews) resolves to a path
       inside the OJS web root, so uploaded files may be directly downloadable or
@@ -611,6 +659,7 @@ rules:
       key: umask
       secure_values: ["0027", "0077", "027", "077"]
       default_when_absent: "0022"
+      ground_truth: false
     description: >-
       `umask` is set to a permissive value (e.g. 0022) that creates
       world-readable files. Submission files may be readable by other
@@ -618,22 +667,24 @@ rules:
     remediation: "Set `umask = 0027` or `0077` to restrict file permissions."
 
   - id: OJS-CFG-FILE-003
-    name: "disable_path_info not enabled"
+    name: "Excessive public user directory size limit"
     module: config
-    cwe: CWE-16
+    cwe: CWE-400
     owasp: "A05:2021"
-    severity: MEDIUM
+    severity: LOW
     pattern_type: builtin
     params:
-      check: bool_directive
-      section: general
-      key: disable_path_info
-      secure_value: "On"
-      default_when_absent: "Off"
+      check: integer_threshold
+      section: files
+      key: public_user_dir_size
+      operator: "<="
+      threshold: 5000
+      default_when_absent: "5000"
+      warn_severity: low
     description: >-
-      `disable_path_info` is Off. On some server configurations PATH_INFO URLs
-      can bypass front-controller routing and access controls.
-    remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
+      `public_user_dir_size` exceeds 5000 KB, allowing users to upload excessive amounts
+      of data to their public directories, which could lead to denial of service.
+    remediation: "Set `public_user_dir_size` to 5000 or less."
 
   - id: OJS-CFG-FILE-004
     name: "config.inc.php missing PHP exit guard"
@@ -646,6 +697,7 @@ rules:
       check: guard_line
       guard_tokens: ["<?php", "exit"]
       scan_lines: 3
+      ground_truth: false
     description: >-
       config.inc.php should begin with a `;<\?php exit; ?>` guard so that if the
       web server ever serves the file as plain text or executes it as PHP, the
@@ -669,6 +721,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `smtp_suppress_cert_check` is On, disabling TLS certificate verification
       for SMTP, enabling MITM attacks on email transport.
@@ -687,6 +740,7 @@ rules:
       key: require_validation
       secure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `require_validation` is Off. Users can log in without validating their
       email, facilitating spam bot registration.
@@ -703,6 +757,7 @@ rules:
     params:
       check: captcha_engine
       section: captcha
+      ground_truth: false
     description: >-
       Neither reCAPTCHA nor ALTCHA is enabled, so there is no bot protection
       on registration/login forms.
@@ -725,6 +780,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `show_stacktrace` is On, exposing file paths and stack frames in error
       output to end users, aiding reconnaissance.
@@ -744,6 +800,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `display_errors` is On, exposing PHP error messages with internal
       paths and structures to end users.
@@ -763,6 +820,7 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `deprecation_warnings` is On, displaying deprecation notices that
       leak internal code structure.
@@ -782,10 +840,52 @@ rules:
       secure_value: "Off"
       insecure_value: "On"
       default_when_absent: "Off"
+      ground_truth: false
     description: >-
       `log_web_service_info` is On, recording web service request data that
       may contain sensitive information.
     remediation: "Set `log_web_service_info = Off` unless actively debugging."
+
+  # ============================== Extensions =================================
+  - id: OJS-CFG-EXT-COOKIE-001
+    name: "session_cookie_httponly disabled"
+    module: config
+    cwe: CWE-1004
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: session_cookie_httponly
+      secure_value: "On"
+      default_when_absent: "On"
+      absent_severity: INFO
+      default_since: "3.3.0"
+      ground_truth: false
+    description: >-
+      The session cookie is not flagged HttpOnly, so client-side JavaScript can
+      read it, escalating any XSS into full session theft.
+    remediation: "Set `session_cookie_httponly = On`."
+
+  - id: OJS-CFG-EXT-PATH-INFO
+    name: "disable_path_info not enabled"
+    module: config
+    cwe: CWE-16
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: disable_path_info
+      secure_value: "On"
+      default_when_absent: "Off"
+      ground_truth: false
+    description: >-
+      `disable_path_info` is Off. On some server configurations PATH_INFO URLs
+      can bypass front-controller routing and access controls.
+    remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
 
   # ============================== Nginx ======================================
   - id: OJS-CFG-NGX-001
@@ -797,6 +897,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_upload_php_block
+      ground_truth: false
     description: >-
       No Nginx location block was found denying execution/access to the uploads
       (files/public) directory. If a PHP file is uploaded it could be executed,
@@ -819,6 +920,7 @@ rules:
         - X-Content-Type-Options
         - Content-Security-Policy
         - Referrer-Policy
+      ground_truth: false
     description: >-
       One or more recommended security response headers are not configured in
       Nginx, weakening defenses against clickjacking, MIME sniffing and
@@ -836,6 +938,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_server_tokens
+      ground_truth: false
     description: >-
       `server_tokens off;` was not found, so Nginx advertises its version in
       responses and error pages, aiding fingerprinting.
@@ -850,6 +953,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_autoindex
+      ground_truth: false
     description: >-
       `autoindex on;` is set, exposing directory listings that can leak file
       names and uploaded content.

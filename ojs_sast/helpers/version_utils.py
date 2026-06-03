@@ -32,6 +32,21 @@ def parse_version(version_str: str) -> Tuple[int, ...]:
     return tuple(result)
 
 
+def parse_version_raw(version_str: str) -> Tuple[int, ...]:
+    """Parse an OJS version string like '3.3.0-13' into a raw tuple without padding."""
+    if not version_str:
+        return ()
+    version_str = version_str.strip().lstrip("v").strip()
+    parts = re.split(r"[.\-]", version_str)
+    result: List[int] = []
+    for p in parts:
+        try:
+            result.append(int(p))
+        except ValueError:
+            break
+    return tuple(result)
+
+
 def is_version_affected(
     detected: Optional[str],
     affected_specs: Optional[List[str]],
@@ -49,17 +64,36 @@ def is_version_affected(
         return True, "OJS version unknown; assuming potentially affected"
 
     det = parse_version(detected)
+    det_branch = det[:3]
 
     if not affected_specs:
         return True, "no affected-version constraints defined"
 
-    # Check patched versions first — if detected matches a patched version, safe.
+    # Check patched versions first — branch aware
     if patched_specs:
+        same_branch_patches = []
+        other_branch_patches = []
         for spec in patched_specs:
             spec_clean = spec.strip()
             pv = parse_version(spec_clean)
-            if det >= pv:
-                return False, f"detected {detected} >= patched {spec_clean}"
+            if pv[:3] == det_branch:
+                same_branch_patches.append((spec_clean, pv))
+            else:
+                other_branch_patches.append(spec_clean)
+
+        if same_branch_patches:
+            # Check if detected is >= any same branch patches
+            for spec_clean, pv in same_branch_patches:
+                if det >= pv:
+                    other_str = f"; ignored patched specs from other branches: {', '.join(other_branch_patches)}" if other_branch_patches else ""
+                    return False, f"detected {detected} >= patched {spec_clean} on same branch{other_str}"
+            
+            # If not safe and same-branch patch exists, then it is affected
+            other_str = f"; ignored patched specs from other branches: {', '.join(other_branch_patches)}" if other_branch_patches else ""
+            below_spec = same_branch_patches[0][0]
+            return True, f"detected {detected} is below patched {below_spec} on same branch{other_str}"
+
+    raw_det = parse_version_raw(detected)
 
     for spec in affected_specs:
         spec = spec.strip()
@@ -85,8 +119,9 @@ def is_version_affected(
                 return True, f"detected {detected} == {spec.lstrip('=')}"
         else:
             # Prefix match: "3.3.0" matches any 3.3.0-x
-            pv = parse_version(spec)
-            if det[:len(pv)] == pv[:len(det)]:
+            raw_spec = parse_version_raw(spec)
+            if raw_det[:len(raw_spec)] == raw_spec:
                 return True, f"detected {detected} matches prefix {spec}"
 
     return False, f"detected {detected} is not in affected ranges {affected_specs}"
+

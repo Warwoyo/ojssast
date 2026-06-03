@@ -38,17 +38,17 @@ def test_insecure_config_findings(ruleset, tmp_path):
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
     ids = _ids(sc.scan(cfg))
     expected = {
-        "OJS-CFG-FILE-004",   # missing guard line
-        "OJS-CFG-SEC-001",    # salt changeme
-        "OJS-CFG-SEC-002",    # empty api_key_secret
-        "OJS-CFG-SEC-003",    # wildcard allowed_hosts
-        "OJS-CFG-SEC-004",    # force_ssl Off
-        "OJS-CFG-SEC-005",    # httponly Off
-        "OJS-CFG-SEC-006",    # samesite None
-        "OJS-CFG-SEC-007",    # show_stacktrace On
-        "OJS-CFG-DB-001",     # breached password "password"
-        "OJS-CFG-FILES-001",  # relative files_dir
-        "OJS-CFG-FILES-002",  # disable_path_info Off
+        "OJS-CFG-FILE-004",        # missing guard line
+        "OJS-CFG-SEC-001",         # force_ssl Off (in config_rules force_ssl is OJS-CFG-SEC-001)
+        "OJS-CFG-SEC-006",         # salt changeme (OJS-CFG-SEC-006)
+        "OJS-CFG-SEC-007",         # empty api_key_secret (OJS-CFG-SEC-007)
+        "OJS-CFG-GEN-003",         # wildcard allowed_hosts (OJS-CFG-GEN-003)
+        "OJS-CFG-EXT-COOKIE-001",  # httponly Off (OJS-CFG-EXT-COOKIE-001)
+        "OJS-CFG-GEN-007",         # samesite None (OJS-CFG-GEN-007)
+        "OJS-CFG-DBG-001",         # show_stacktrace On (OJS-CFG-DBG-001)
+        "OJS-CFG-DB-001",          # breached password "password" (OJS-CFG-DB-001)
+        "OJS-CFG-FILE-001",        # relative files_dir (OJS-CFG-FILE-001)
+        "OJS-CFG-EXT-PATH-INFO",   # disable_path_info Off (OJS-CFG-EXT-PATH-INFO)
     }
     assert expected <= ids
 
@@ -71,22 +71,22 @@ def test_salt_too_short(ruleset, tmp_path):
     cfg.write_text(";<?php exit; ?>\n[security]\nsalt = short\n")
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
     findings = _by_id(sc.scan(cfg))
-    assert "OJS-CFG-SEC-001" in findings
-    assert findings["OJS-CFG-SEC-001"].severity.value == "CRITICAL"
+    assert "OJS-CFG-SEC-006" in findings
+    assert findings["OJS-CFG-SEC-006"].severity.value == "CRITICAL"
 
 
 def test_password_equals_username(ruleset, tmp_path):
     cfg = tmp_path / "c.inc.php"
     cfg.write_text(";<?php exit; ?>\n[database]\nusername = ojsadmin\npassword = ojsadmin\nname = db\n")
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
-    assert "OJS-CFG-DB-002" in _ids(sc.scan(cfg))
+    assert "OJS-CFG-DB-001" in _ids(sc.scan(cfg))
 
 
 def test_files_dir_absolute_outside_not_flagged(ruleset, tmp_path):
     cfg = tmp_path / "c.inc.php"
     cfg.write_text(";<?php exit; ?>\n[files]\nfiles_dir = /var/lib/ojs/files\n")
     sc = ConfigScanner(ruleset, ojs_path=tmp_path / "webroot")
-    assert "OJS-CFG-FILES-001" not in _ids(sc.scan(cfg))
+    assert "OJS-CFG-FILE-001" not in _ids(sc.scan(cfg))
 
 
 def test_absent_httponly_is_info(ruleset, tmp_path):
@@ -95,8 +95,8 @@ def test_absent_httponly_is_info(ruleset, tmp_path):
     cfg.write_text(";<?php exit; ?>\n[general]\nbase_url = x\n")
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
     by = _by_id(sc.scan(cfg))
-    assert "OJS-CFG-SEC-005" in by
-    assert by["OJS-CFG-SEC-005"].severity.value == "INFO"
+    assert "OJS-CFG-EXT-COOKIE-001" in by
+    assert by["OJS-CFG-EXT-COOKIE-001"].severity.value == "INFO"
 
 
 # ----------------------------- nginx -------------------------------------- #
@@ -193,3 +193,103 @@ def test_config_findings_all_have_snippets(ruleset, tmp_path):
     for f in findings:
         assert f.code_snippet is not None and len(f.code_snippet) > 0, \
             f"Finding {f.rule_id} missing code_snippet"
+
+
+# ----------------------------- regression alignment tests ---------------- #
+def test_regression_user_validation_period(ruleset, tmp_path):
+    """Test OJS-CFG-GEN-011 logic."""
+    cfg1 = tmp_path / "c1.inc.php"
+    cfg1.write_text(";<?php exit; ?>\n[general]\nuser_validation_period = 0\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings1 = _ids(sc.scan(cfg1))
+    assert "OJS-CFG-GEN-011" in findings1
+
+    cfg2 = tmp_path / "c2.inc.php"
+    cfg2.write_text(";<?php exit; ?>\n[general]\nuser_validation_period = 14\n")
+    findings2 = _ids(sc.scan(cfg2))
+    assert "OJS-CFG-GEN-011" not in findings2
+
+
+def test_regression_default_db_credentials(ruleset, tmp_path):
+    """Test OJS-CFG-DB-001 logic."""
+    cfg1 = tmp_path / "c1.inc.php"
+    cfg1.write_text(";<?php exit; ?>\n[database]\nusername = ojs\npassword = ojs\nname = ojs\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings1 = _ids(sc.scan(cfg1))
+    assert "OJS-CFG-DB-001" in findings1
+
+    cfg2 = tmp_path / "c2.inc.php"
+    cfg2.write_text(";<?php exit; ?>\n[database]\nusername = ojs_user\npassword = strong_and_long_pwd_123!\nname = ojs_db\n")
+    findings2 = _ids(sc.scan(cfg2))
+    assert "OJS-CFG-DB-001" not in findings2
+
+
+def test_regression_db_debug(ruleset, tmp_path):
+    """Test OJS-CFG-DB-002 logic."""
+    cfg1 = tmp_path / "c1.inc.php"
+    cfg1.write_text(";<?php exit; ?>\n[database]\ndebug = On\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings1 = _ids(sc.scan(cfg1))
+    assert "OJS-CFG-DB-002" in findings1
+
+    # missing debug -> pass
+    cfg2 = tmp_path / "c2.inc.php"
+    cfg2.write_text(";<?php exit; ?>\n[database]\nhost = localhost\n")
+    findings2 = _ids(sc.scan(cfg2))
+    assert "OJS-CFG-DB-002" not in findings2
+
+
+def test_regression_db_secure_remote(ruleset, tmp_path):
+    """Test OJS-CFG-DB-003 logic."""
+    # host remote, secure Off -> fail
+    cfg1 = tmp_path / "c1.inc.php"
+    cfg1.write_text(";<?php exit; ?>\n[database]\nhost = db.example.org\nsecure = Off\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings1 = _ids(sc.scan(cfg1))
+    assert "OJS-CFG-DB-003" in findings1
+
+    # host local, secure Off -> pass
+    cfg2 = tmp_path / "c2.inc.php"
+    cfg2.write_text(";<?php exit; ?>\n[database]\nhost = localhost\nsecure = Off\n")
+    findings2 = _ids(sc.scan(cfg2))
+    assert "OJS-CFG-DB-003" not in findings2
+
+    # unix socket set -> pass
+    cfg3 = tmp_path / "c3.inc.php"
+    cfg3.write_text(";<?php exit; ?>\n[database]\nhost = db.example.org\nunix_socket = /var/run/mysql.sock\n")
+    findings3 = _ids(sc.scan(cfg3))
+    assert "OJS-CFG-DB-003" not in findings3
+
+    # host remote, secure On -> pass
+    cfg4 = tmp_path / "c4.inc.php"
+    cfg4.write_text(";<?php exit; ?>\n[database]\nhost = db.example.org\nsecure = On\n")
+    findings4 = _ids(sc.scan(cfg4))
+    assert "OJS-CFG-DB-003" not in findings4
+
+
+def test_regression_public_user_dir_size(ruleset, tmp_path):
+    """Test OJS-CFG-FILE-003 logic."""
+    cfg1 = tmp_path / "c1.inc.php"
+    cfg1.write_text(";<?php exit; ?>\n[files]\npublic_user_dir_size = 6000\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings1 = sc.scan(cfg1)
+    by1 = _by_id(findings1)
+    assert "OJS-CFG-FILE-003" in by1
+    assert by1["OJS-CFG-FILE-003"].severity.value == "LOW"
+
+    cfg2 = tmp_path / "c2.inc.php"
+    cfg2.write_text(";<?php exit; ?>\n[files]\npublic_user_dir_size = 5000\n")
+    findings2 = _ids(sc.scan(cfg2))
+    assert "OJS-CFG-FILE-003" not in findings2
+
+
+def test_regression_informational_rules(ruleset, tmp_path):
+    """Test show_upgrade_warning and enable_beacon do not generate security findings."""
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n[general]\nshow_upgrade_warning = On\nenable_beacon = Off\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings = sc.scan(cfg)
+    ids = _ids(findings)
+    # The findings should not be emitted (since reporting is false)
+    assert "OJS-CFG-GEN-009" not in ids
+    assert "OJS-CFG-GEN-010" not in ids

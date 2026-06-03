@@ -149,6 +149,8 @@ class ConfigScanner:
             sections = parse_config(text)
             rel = str(config_path)
             for rule in config_rules:
+                if rule.params.get("reporting") is False:
+                    continue
                 check = rule.params.get("check")
                 if check and not check.startswith("nginx_"):
                     f = self._run_check(rule, check, text, sections, rel)
@@ -161,6 +163,8 @@ class ConfigScanner:
         nginx_files = self._load_nginx(nginx_paths)
         if nginx_files:
             for rule in config_rules:
+                if rule.params.get("reporting") is False:
+                    continue
                 check = rule.params.get("check", "")
                 if check.startswith("nginx_"):
                     for nx_text, nx_label in nginx_files:
@@ -182,6 +186,9 @@ class ConfigScanner:
 
     def _finding(self, rule: Rule, file_path: str, detail: str,
                  severity: Optional[Severity] = None, **kw) -> Finding:
+        extra = dict(kw.pop("extra", {}))
+        if rule.params.get("ground_truth") is False:
+            extra["ground_truth"] = False
         return Finding(
             rule_id=rule.id,
             module="config",
@@ -195,6 +202,7 @@ class ConfigScanner:
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
             confidence="high",
+            extra=extra,
             **kw,
         )
 
@@ -460,6 +468,74 @@ class ConfigScanner:
                                       f"('{other}').",
                                       code_snippet=snippet)]
         return []
+
+    # -- informational_directive ------------------------------------------- #
+    def _check_informational_directive(self, rule, text, sections, rel) -> List[Finding]:
+        return []
+
+    # -- default_db_credentials --------------------------------------------- #
+    def _check_default_db_credentials(self, rule, text, sections, rel) -> List[Finding]:
+        section = rule.params.get("section", "database")
+        username = get_value(sections, section, "username") or ""
+        password = get_value(sections, section, "password") or ""
+        dbname = get_value(sections, section, "name") or ""
+
+        username = username.strip()
+        password = password.strip()
+        dbname = dbname.strip()
+
+        reasons = []
+
+        # 1. username/password default seperti ojs/ojs
+        if username.lower() == "ojs" and password.lower() == "ojs":
+            reasons.append("default username/password (ojs/ojs) used")
+
+        # 2. fail jika password lemah, kosong, root, password, ojs
+        weak_set = {"", "root", "password", "ojs", "changeme", "database", "mysql", "123456", "12345678", "admin", "secret"}
+        if password.lower() in weak_set:
+            reasons.append(f"password is weak or empty ('{password}')")
+        elif len(password) < 6:
+            reasons.append(f"password is too short ({len(password)} chars; minimum 6 required)")
+        elif password.lower() == username.lower() or password.lower() == dbname.lower():
+            reasons.append("password is identical to username or database name")
+
+        if reasons:
+            snippet = self._snippet_for_key(text, section, "password")
+            return [self._finding(
+                rule, rel,
+                f"Weak database credentials detected: {'; '.join(reasons)}.",
+                code_snippet=snippet
+            )]
+        return []
+
+    # -- db_secure_remote --------------------------------------------------- #
+    def _check_db_secure_remote(self, rule, text, sections, rel) -> List[Finding]:
+        section = rule.params.get("section", "database")
+        host = get_value(sections, section, "host")
+        secure = get_value(sections, section, "secure")
+        unix_socket = get_value(sections, section, "unix_socket")
+
+        # host local check
+        is_local = False
+        if host:
+            h_clean = host.strip().lower()
+            if h_clean in ("localhost", "127.0.0.1"):
+                is_local = True
+        else:
+            is_local = True
+
+        has_unix_socket = bool(unix_socket and unix_socket.strip())
+        is_secure = _as_bool(secure) is True
+
+        if is_local or has_unix_socket or is_secure:
+            return []
+
+        snippet = self._snippet_for_key(text, section, "host")
+        return [self._finding(
+            rule, rel,
+            f"Database host '{host}' is remote and secure connection (SSL/TLS) is not enabled.",
+            code_snippet=snippet
+        )]
 
     # -- files_dir_webroot ------------------------------------------------- #
     def _check_files_dir_webroot(self, rule, text, sections, rel) -> List[Finding]:
