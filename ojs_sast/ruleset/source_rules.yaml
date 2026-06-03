@@ -230,6 +230,8 @@ rules:
     pattern: '\.(?:innerHTML|outerHTML)\s*=\s*[^"''`;\s][^;\n]*'
     cvss_score: 5.4
     cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
     description: >-
       An element's innerHTML/outerHTML is assigned a value that is not a plain
       string literal (likely a variable or expression), which can introduce
@@ -252,6 +254,8 @@ rules:
     pattern: 'document\.write(?:ln)?\s*\(\s*[^"''`)\s]'
     cvss_score: 5.4
     cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
     description: >-
       document.write()/writeln() is called with a non-literal argument, which
       can introduce DOM-based XSS when the argument is attacker-controlled.
@@ -270,6 +274,8 @@ rules:
     pattern: '(?<![\w.$])eval\s*\('
     cvss_score: 7.4
     cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
     description: >-
       eval() executes arbitrary JavaScript and is a common DOM XSS / code
       injection sink when fed dynamic input.
