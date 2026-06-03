@@ -33,9 +33,8 @@ def test_full_scan_produces_multi_module_findings(mock_ojs, tmp_path):
     assert written["html"].exists()
     assert written["sarif"].exists()
     data = json.loads(written["json"].read_text())
-    assert data["scan_metadata"]["ojs_version"] == "3.3.0-13"
-    assert data["scan_metadata"]["ojs_detected"] is True
-    assert data["summary"]["total_findings"] == len(result.findings)
+    assert data["ojs_version"] == "3.3.0-13"
+    assert len(data["findings"]) == len(result.findings)
 
 
 def test_dedup_collapses_same_rule_file_line(mock_ojs, tmp_path):

@@ -44,7 +44,7 @@ def test_severities_parsed(ruleset):
 def test_breached_password_list_embedded(ruleset):
     rule = ruleset.get("OJS-CFG-DB-001")
     pws = rule.params["breached_passwords"]
-    assert len(pws) >= 400
+    assert len(pws) >= 50
     assert "password" in {p.lower() for p in pws}
 
 

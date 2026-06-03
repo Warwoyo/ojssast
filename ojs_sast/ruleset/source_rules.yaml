@@ -124,7 +124,7 @@ rules:
     module: source_code
     cwe: CWE-89
     owasp: "A03:2021"
-    severity: HIGH
+    severity: CRITICAL
     file_extensions: [".php", ".inc", ".phtml"]
     pattern_type: regex
     pattern: '(?:(?:DB|Capsule)::|-\>)(?:raw|statement|unprepared)\s*\([^;]*?(?:\.\s*\$[A-Za-z_]|\{\$[A-Za-z_][A-Za-z0-9_]*\})'
@@ -218,3 +218,67 @@ rules:
     remediation: >-
       Remove the dangerous call or strictly validate and escape arguments. Prefer
       native PHP APIs over shelling out, and never eval() request input.
+
+  - id: RULE-SRC-010
+    name: "JavaScript innerHTML/outerHTML assigned a non-literal value"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: MEDIUM
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: '\.(?:innerHTML|outerHTML)\s*=\s*[^"''`;\s][^;\n]*'
+    cvss_score: 5.4
+    cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
+    description: >-
+      An element's innerHTML/outerHTML is assigned a value that is not a plain
+      string literal (likely a variable or expression), which can introduce
+      DOM-based XSS if the value contains attacker-controlled markup.
+    remediation: >-
+      Use textContent for text, or sanitize HTML with a vetted sanitizer before
+      assigning to innerHTML. Avoid building markup from untrusted strings.
+    false_positive_exceptions:
+      - pattern: "innerHTML\\s*=\\s*['\"`]\\s*['\"`]"
+        description: "Clearing the element with an empty string literal."
+
+  - id: RULE-SRC-011
+    name: "JavaScript document.write with non-literal argument"
+    module: source_code
+    cwe: CWE-79
+    owasp: "A03:2021"
+    severity: MEDIUM
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: 'document\.write(?:ln)?\s*\(\s*[^"''`)\s]'
+    cvss_score: 5.4
+    cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
+    description: >-
+      document.write()/writeln() is called with a non-literal argument, which
+      can introduce DOM-based XSS when the argument is attacker-controlled.
+    remediation: >-
+      Avoid document.write(). Build DOM nodes with safe APIs (createElement,
+      textContent) and sanitize any HTML before insertion.
+
+  - id: RULE-SRC-012
+    name: "JavaScript eval() usage"
+    module: source_code
+    cwe: CWE-95
+    owasp: "A03:2021"
+    severity: HIGH
+    file_extensions: [".js", ".jsx"]
+    pattern_type: regex
+    pattern: '(?<![\w.$])eval\s*\('
+    cvss_score: 7.4
+    cve_references: []
+    ground_truth: false
+    evaluation_scope: generic
+    description: >-
+      eval() executes arbitrary JavaScript and is a common DOM XSS / code
+      injection sink when fed dynamic input.
+    remediation: >-
+      Remove eval(). Use JSON.parse() for data, or refactor to avoid dynamic
+      code execution entirely.

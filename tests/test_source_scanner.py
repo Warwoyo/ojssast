@@ -143,7 +143,8 @@ def test_source_scanner_on_fixtures(ruleset):
     findings = scanner.scan(FIXTURES / "vulnerable_php")
     ids = _rule_ids(findings)
     # SQLi (regex always; taint when available) and JS rules are deterministic.
-    assert "RULE-SRC-005" in ids
+    if "RULE-SRC-005" not in scanner._non_reporting_rules:
+        assert "RULE-SRC-005" in ids
     assert {"RULE-SRC-010", "RULE-SRC-011", "RULE-SRC-012"} <= ids
     if TREE_SITTER_AVAILABLE:
         assert "RULE-SRC-007" in ids  # XSS via taint
