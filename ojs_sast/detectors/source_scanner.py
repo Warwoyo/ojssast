@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from ..helpers.snippet_utils import build_code_snippet
 from ..models import Finding, Rule, Severity
 from ..ruleset.loader import Ruleset
 
@@ -155,6 +156,7 @@ class PHPTaintAnalyzer:
         self.ruleset = ruleset
         self.findings: List[Finding] = []
         self._lines = source.split(b"\n")
+        self._source_text = source.decode("utf-8", "replace")
         self._emitted: set = set()  # (rule_id, line, label) dedup within file
 
     # -- text / position helpers ------------------------------------------- #
@@ -530,7 +532,7 @@ class PHPTaintAnalyzer:
             owasp=owasp,
             cvss_score=cvss,
             cve_references=cves,
-            code_snippet=self._line_text(line),
+            code_snippet=build_code_snippet(self._source_text, line),
             taint_source=pretty_source,
             confidence="high",
         ))
@@ -580,7 +582,7 @@ class RegexEngine:
                     owasp=rule.owasp,
                     cvss_score=rule.cvss_score,
                     cve_references=list(rule.cve_references),
-                    code_snippet=line_text,
+                    code_snippet=build_code_snippet(text, line_no),
                     confidence="medium",
                 ))
         return findings
@@ -683,7 +685,7 @@ def scan_smarty(file_path: str, text: str, rule: Optional[Rule]) -> List[Finding
             owasp=rule.owasp if rule else "A03:2021",
             cvss_score=rule.cvss_score if rule else 6.1,
             cve_references=list(rule.cve_references) if rule else [],
-            code_snippet=line_text,
+            code_snippet=build_code_snippet(text, line_no),
             confidence="medium",
         ))
     return findings
@@ -731,6 +733,7 @@ def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Findi
             yield from find_classes(c)
 
     def _make_finding(cls_name, mname, line_no, col, detail):
+        src_text = source.decode("utf-8", "replace")
         return Finding(
             rule_id=rule.id if rule else "RULE-SRC-003",
             module="source_code",
@@ -745,7 +748,7 @@ def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Findi
             owasp=rule.owasp if rule else "A01:2021",
             cvss_score=rule.cvss_score if rule else 4.3,
             cve_references=list(rule.cve_references) if rule else [],
-            code_snippet=f"{cls_name}::{mname}(...)",
+            code_snippet=build_code_snippet(src_text, line_no),
             confidence="low",
         )
 

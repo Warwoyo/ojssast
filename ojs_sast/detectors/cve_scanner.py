@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..helpers.snippet_utils import build_code_snippet
 from ..helpers.path_utils import matches_cve_path
 from ..helpers.php_utils import (
     extract_class_body,
@@ -168,7 +169,9 @@ class _BaseDetector:
         version_reasoning: str,
         confidence: str,
         confidence_reason: str,
+        source_text: str = "",
     ) -> Finding:
+        code_snip = build_code_snippet(source_text, line) if source_text else snippet
         return Finding(
             rule_id=rule.id,
             module="source_code",
@@ -182,7 +185,7 @@ class _BaseDetector:
             owasp=rule.owasp,
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
-            code_snippet=snippet,
+            code_snippet=code_snip,
             confidence=confidence,
             matched_source=matched_source,
             matched_sink=matched_sink,
@@ -253,6 +256,7 @@ class _BaseDetector:
             version_reasoning=version_reason,
             confidence=confidence,
             confidence_reason=conf_reason,
+            source_text=source,
         )
 
 
@@ -338,6 +342,7 @@ class _CSRFDetector(_BaseDetector):
             version_reasoning=version_reason,
             confidence=confidence,
             confidence_reason=conf_reason,
+            source_text=source,
         )
 
 
@@ -420,6 +425,7 @@ class _SmartyXSSDetector(_BaseDetector):
                     version_reasoning=version_reason,
                     confidence=confidence,
                     confidence_reason=conf_reason,
+                    source_text=source,
                 )
         return None
 

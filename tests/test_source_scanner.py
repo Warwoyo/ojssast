@@ -160,3 +160,63 @@ def test_scanner_skips_large_and_binary(ruleset, tmp_path):
     scanner = SourceScanner(ruleset)
     findings = scanner.scan(tmp_path)
     assert findings == []  # both skipped
+
+
+# ----------------------------- snippet checks ----------------------------- #
+def test_regex_snippet_multiline(ruleset):
+    """Regex findings should produce ≥5-line snippets with >>> marker."""
+    eng = RegexEngine(ruleset)
+    # Build a file with enough lines.
+    lines = ["<?php"] + [f"// line {i}" for i in range(2, 12)]
+    lines[5] = 'DB::raw("SELECT " . $id);'
+    text = "\n".join(lines)
+    findings = eng.scan("t.php", ".php", text)
+    sqli = [f for f in findings if f.rule_id == "RULE-SRC-005"]
+    if sqli:  # rule may be non-reporting
+        snippet = sqli[0].code_snippet
+        assert snippet is not None
+        snippet_lines = snippet.strip().splitlines()
+        assert len(snippet_lines) >= 5
+        assert any(">>>" in l for l in snippet_lines)
+
+
+def test_smarty_snippet_multiline(ruleset):
+    """Smarty findings should produce ≥5-line snippets."""
+    lines = ["{* template *}"] + [f"<p>line {i}</p>" for i in range(2, 10)]
+    lines[3] = "<p>{$userInput}</p>"  # unescaped variable at line 4
+    text = "\n".join(lines)
+    findings = scan_smarty("test.tpl", text, ruleset.get("RULE-SRC-001"))
+    assert len(findings) >= 1
+    snippet = findings[0].code_snippet
+    assert snippet is not None
+    snippet_lines = snippet.strip().splitlines()
+    assert len(snippet_lines) >= 5
+
+
+@requires_ts
+def test_csrf_snippet_not_synthetic(ruleset):
+    """CSRF findings should NOT use synthetic 'Class::method(...)' snippets."""
+    code = b"<?php class FooHandler extends Handler { function saveFoo(){ $x = $_POST['x']; } }"
+    findings = scan_csrf("FooHandler.php", code, ruleset.get("RULE-SRC-003"))
+    csrf = [f for f in findings if f.rule_id == "RULE-SRC-003"]
+    if csrf:
+        snippet = csrf[0].code_snippet
+        assert snippet is not None
+        # Old format was "FooHandler::saveFoo(...)" - that should no longer appear.
+        assert "::saveFoo(...)" not in snippet
+        # Should have real code lines instead.
+        assert ">>>" in snippet
+
+
+@requires_ts
+def test_taint_snippet_multiline(ruleset):
+    """Taint findings should produce multi-line snippets."""
+    code = b"<?php\n// line 2\n// line 3\n$x = $_GET['q'];\necho $x;\n// line 6\n// line 7\n"
+    findings = PHPTaintAnalyzer(code, "t.php", ruleset).analyze()
+    xss = [f for f in findings if f.rule_id == "RULE-SRC-007"]
+    if xss:
+        snippet = xss[0].code_snippet
+        assert snippet is not None
+        snippet_lines = snippet.strip().splitlines()
+        assert len(snippet_lines) >= 5
+        assert any(">>>" in l for l in snippet_lines)

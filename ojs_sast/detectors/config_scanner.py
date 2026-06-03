@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ..helpers.snippet_utils import build_code_snippet, build_missing_evidence_snippet
 from ..models import Finding, Rule, Severity
 from ..ruleset.loader import Ruleset
 
@@ -73,6 +74,35 @@ def get_value(sections: Dict[str, Dict[str, str]], section: str, key: str) -> Op
     return None
 
 
+def find_config_key_line(text: str, section: str, key: str) -> Optional[int]:
+    """Find the line number where ``key = ...`` appears under ``[section]``."""
+    in_section = False
+    sec_lower = section.lower()
+    key_lower = key.lower()
+    for i, raw_line in enumerate(text.splitlines(), 1):
+        line = raw_line.strip()
+        sec_m = re.match(r"\[([^\]]+)\]", line)
+        if sec_m:
+            in_section = sec_m.group(1).strip().lower() == sec_lower
+            continue
+        if in_section and "=" in line:
+            k, _, _ = line.partition("=")
+            if k.strip().lower() == key_lower:
+                return i
+    return None
+
+
+def find_section_line(text: str, section: str) -> Optional[int]:
+    """Find the line number of the ``[section]`` header."""
+    sec_lower = section.lower()
+    for i, raw_line in enumerate(text.splitlines(), 1):
+        line = raw_line.strip()
+        sec_m = re.match(r"\[([^\]]+)\]", line)
+        if sec_m and sec_m.group(1).strip().lower() == sec_lower:
+            return i
+    return None
+
+
 def _as_bool(value: Optional[str]) -> Optional[bool]:
     if value is None:
         return None
@@ -127,13 +157,14 @@ class ConfigScanner:
         else:
             logger.warning("config.inc.php not found at %s; skipping config checks", config_path)
 
-        # Nginx
-        nginx_text, nginx_label = self._load_nginx(nginx_paths)
-        if nginx_text is not None:
+        # Nginx — process each file individually for accurate line numbers.
+        nginx_files = self._load_nginx(nginx_paths)
+        if nginx_files:
             for rule in config_rules:
                 check = rule.params.get("check", "")
                 if check.startswith("nginx_"):
-                    findings.extend(self._run_nginx_check(rule, check, nginx_text, nginx_label))
+                    for nx_text, nx_label in nginx_files:
+                        findings.extend(self._run_nginx_check(rule, check, nx_text, nx_label))
         elif nginx_paths:
             logger.warning("No readable Nginx config found at provided path(s)")
 
@@ -167,6 +198,31 @@ class ConfigScanner:
             **kw,
         )
 
+    # -- snippet builders for config ---------------------------------------- #
+    @staticmethod
+    def _snippet_for_key(text: str, section: str, key: str) -> str:
+        """Build a code snippet highlighting the line where *key* is set."""
+        line = find_config_key_line(text, section, key)
+        if line is not None:
+            return build_code_snippet(text, line)
+        # Key not found in expected section — fall back to section header.
+        return ConfigScanner._snippet_for_section(text, section)
+
+    @staticmethod
+    def _snippet_for_section(text: str, section: str) -> str:
+        """Build a snippet anchored on a section header."""
+        line = find_section_line(text, section)
+        if line is not None:
+            return build_code_snippet(text, line)
+        # Section not found — show file head.
+        return build_code_snippet(text, 1)
+
+    @staticmethod
+    def _snippet_missing_key(text: str, section: str, key: str) -> str:
+        """Build a missing-evidence snippet for an absent key."""
+        anchor = find_section_line(text, section)
+        return build_missing_evidence_snippet(text, anchor, key)
+
     # -- guard_line -------------------------------------------------------- #
     def _check_guard_line(self, rule, text, sections, rel) -> List[Finding]:
         tokens = [t.lower() for t in rule.params.get("guard_tokens", ["<?php", "exit"])]
@@ -174,8 +230,10 @@ class ConfigScanner:
         head = "\n".join(text.splitlines()[:n]).lower()
         if all(tok in head for tok in tokens):
             return []
+        snippet = build_missing_evidence_snippet(text, 1, "guard line ;<?php exit; ?>")
         return [self._finding(rule, rel,
-                              "The leading ';<?php exit; ?>' guard is missing from config.inc.php.")]
+                              "The leading ';<?php exit; ?>' guard is missing from config.inc.php.",
+                              code_snippet=snippet)]
 
     # -- value_strength ---------------------------------------------------- #
     def _check_value_strength(self, rule, text, sections, rel) -> List[Finding]:
@@ -185,14 +243,19 @@ class ConfigScanner:
         defaults = {str(d).lower() for d in rule.params.get("default_values", [])}
         min_len = int(rule.params.get("min_length", 0))
         if value is None:
-            return [self._finding(rule, rel, f"'{key}' is not set in [{section}].")]
+            snippet = self._snippet_missing_key(text, section, key)
+            return [self._finding(rule, rel, f"'{key}' is not set in [{section}].",
+                                  code_snippet=snippet)]
+        snippet = self._snippet_for_key(text, section, key)
         if value.lower() in defaults:
             reason = "empty" if value == "" else f"a known default ('{value}')"
-            return [self._finding(rule, rel, f"'{key}' is set to {reason}.")]
+            return [self._finding(rule, rel, f"'{key}' is set to {reason}.",
+                                  code_snippet=snippet)]
         if min_len and len(value) < min_len:
             return [self._finding(rule, rel,
                                   f"'{key}' is only {len(value)} characters; at least "
-                                  f"{min_len} are recommended.")]
+                                  f"{min_len} are recommended.",
+                                  code_snippet=snippet)]
         return []
 
     # -- allowed_hosts ----------------------------------------------------- #
@@ -201,13 +264,18 @@ class ConfigScanner:
         key = rule.params.get("key", "allowed_hosts")
         value = get_value(sections, section, key)
         if value is None or value.strip() == "":
+            snippet = self._snippet_missing_key(text, section, key) if value is None \
+                else self._snippet_for_key(text, section, key)
             return [self._finding(rule, rel,
                                   "'allowed_hosts' is empty, so OJS trusts the inbound Host "
-                                  "header (Host header injection).")]
+                                  "header (Host header injection).",
+                                  code_snippet=snippet)]
         if "*" in value:
+            snippet = self._snippet_for_key(text, section, key)
             return [self._finding(rule, rel,
                                   f"'allowed_hosts' uses a wildcard ('{value}'); trusts arbitrary "
-                                  f"Host headers.")]
+                                  f"Host headers.",
+                                  code_snippet=snippet)]
         return []
 
     # -- bool_directive ---------------------------------------------------- #
@@ -219,15 +287,18 @@ class ConfigScanner:
         value = get_value(sections, section, key)
 
         if value is None:
-            return self._absent(rule, key, rel, secure)
+            return self._absent(rule, key, rel, secure, text=text, section=section)
 
+        snippet = self._snippet_for_key(text, section, key)
         if insecure is not None:
             if _bool_equal(value, insecure):
-                return [self._finding(rule, rel, f"'{key}' is set to '{value}' (insecure).")]
+                return [self._finding(rule, rel, f"'{key}' is set to '{value}' (insecure).",
+                                      code_snippet=snippet)]
             return []
         if secure is not None and not _bool_equal(value, secure):
             return [self._finding(rule, rel,
-                                  f"'{key}' is '{value}'; should be '{secure}'.")]
+                                  f"'{key}' is '{value}'; should be '{secure}'.",
+                                  code_snippet=snippet)]
         return []
 
     # -- enum_directive ---------------------------------------------------- #
@@ -238,12 +309,15 @@ class ConfigScanner:
         value = get_value(sections, section, key)
         if value is None:
             return self._absent(rule, key, rel,
-                                rule.params.get("default_when_absent"), secure_values)
+                                rule.params.get("default_when_absent"), secure_values,
+                                text=text, section=section)
         if value.strip().lower() in secure_values:
             return []
+        snippet = self._snippet_for_key(text, section, key)
         return [self._finding(rule, rel,
                               f"'{key}' is '{value}'; expected one of "
-                              f"{sorted(rule.params.get('secure_values', []))}.")]
+                              f"{sorted(rule.params.get('secure_values', []))}.",
+                              code_snippet=snippet)]
 
     # -- integer_threshold ------------------------------------------------- #
     def _check_integer_threshold(self, rule, text, sections, rel) -> List[Finding]:
@@ -259,13 +333,17 @@ class ConfigScanner:
             if default is not None:
                 value = str(default)
             else:
+                snippet = self._snippet_missing_key(text, section, key)
                 return [self._finding(rule, rel, f"'{key}' is not set in [{section}].",
-                                      severity=Severity.from_str(warn_sev))]
+                                      severity=Severity.from_str(warn_sev),
+                                      code_snippet=snippet)]
 
         try:
             val = int(value.strip())
         except (ValueError, AttributeError):
-            return [self._finding(rule, rel, f"'{key}' has non-numeric value '{value}'.")]
+            snippet = self._snippet_for_key(text, section, key)
+            return [self._finding(rule, rel, f"'{key}' has non-numeric value '{value}'.",
+                                  code_snippet=snippet)]
 
         passed = False
         if operator == "<=":
@@ -281,9 +359,11 @@ class ConfigScanner:
 
         if passed:
             return []
+        snippet = self._snippet_for_key(text, section, key)
         return [self._finding(rule, rel,
                               f"'{key}' is {val}; expected {operator} {threshold}.",
-                              severity=Severity.from_str(warn_sev))]
+                              severity=Severity.from_str(warn_sev),
+                              code_snippet=snippet)]
 
     # -- base_url_scheme --------------------------------------------------- #
     def _check_base_url_scheme(self, rule, text, sections, rel) -> List[Finding]:
@@ -293,19 +373,24 @@ class ConfigScanner:
         findings: List[Finding] = []
 
         if value is None:
-            return [self._finding(rule, rel, f"'{key}' is not set.")]
+            snippet = self._snippet_missing_key(text, section, key)
+            return [self._finding(rule, rel, f"'{key}' is not set.",
+                                  code_snippet=snippet)]
 
+        snippet = self._snippet_for_key(text, section, key)
         # Check placeholder values.
         placeholders = rule.params.get("placeholder_values", [])
         if value.strip().lower() in [p.lower() for p in placeholders]:
             findings.append(self._finding(rule, rel,
-                                          f"'{key}' is still the default placeholder ('{value}')."))
+                                          f"'{key}' is still the default placeholder ('{value}').",
+                                          code_snippet=snippet))
 
         # Check scheme.
         required = rule.params.get("required_scheme", "https")
         if value.strip().lower().startswith("http://"):
             findings.append(self._finding(rule, rel,
-                                          f"'{key}' uses HTTP instead of HTTPS."))
+                                          f"'{key}' uses HTTP instead of HTTPS.",
+                                          code_snippet=snippet))
 
         return findings
 
@@ -324,8 +409,10 @@ class ConfigScanner:
                 found.append(pat)
 
         if found:
+            snippet = self._snippet_for_key(text, section, key)
             return [self._finding(rule, rel,
-                                  f"'allowed_html' contains dangerous tag(s): {', '.join(found)}.")]
+                                  f"'allowed_html' contains dangerous tag(s): {', '.join(found)}.",
+                                  code_snippet=snippet)]
         return []
 
     # -- captcha_engine ---------------------------------------------------- #
@@ -336,9 +423,11 @@ class ConfigScanner:
 
         if recaptcha in _TRUE_WORDS or altcha in _TRUE_WORDS:
             return []
+        snippet = self._snippet_missing_key(text, "captcha", "recaptcha / altcha")
         return [self._finding(rule, rel,
                               "Neither reCAPTCHA nor ALTCHA is enabled in [captcha]. "
-                              "No bot protection on registration/login.")]
+                              "No bot protection on registration/login.",
+                              code_snippet=snippet)]
 
     # -- breached_password ------------------------------------------------- #
     def _check_breached_password(self, rule, text, sections, rel) -> List[Finding]:
@@ -349,8 +438,10 @@ class ConfigScanner:
             return []
         breached = {str(p).lower() for p in rule.params.get("breached_passwords", [])}
         if value.lower() in breached:
+            snippet = self._snippet_for_key(text, section, key)
             return [self._finding(rule, rel,
-                                  "The database password matches a common/breached password.")]
+                                  "The database password matches a common/breached password.",
+                                  code_snippet=snippet)]
         return []
 
     # -- password_equals_identity ------------------------------------------ #
@@ -363,9 +454,11 @@ class ConfigScanner:
         for cmp_key in rule.params.get("compare_keys", ["username", "name"]):
             other = get_value(sections, section, cmp_key)
             if other and password == other:
+                snippet = self._snippet_for_key(text, section, key)
                 return [self._finding(rule, rel,
                                       f"The database password equals the database {cmp_key} "
-                                      f"('{other}').")]
+                                      f"('{other}').",
+                                      code_snippet=snippet)]
         return []
 
     # -- files_dir_webroot ------------------------------------------------- #
@@ -375,11 +468,13 @@ class ConfigScanner:
         value = get_value(sections, section, key)
         if not value:
             return []
+        snippet = self._snippet_for_key(text, section, key)
         p = Path(value)
         if not p.is_absolute():
             return [self._finding(rule, rel,
                                   f"'files_dir' is a relative path ('{value}'), resolving inside "
-                                  f"the OJS web root.")]
+                                  f"the OJS web root.",
+                                  code_snippet=snippet)]
         if self.ojs_path:
             try:
                 fd = p.resolve()
@@ -387,13 +482,15 @@ class ConfigScanner:
                 if fd == root or root in fd.parents:
                     return [self._finding(rule, rel,
                                           f"'files_dir' ('{value}') is inside the OJS install/web "
-                                          f"root ({root}).")]
+                                          f"root ({root}).",
+                                          code_snippet=snippet)]
             except OSError:  # pragma: no cover
                 pass
         return []
 
     # -- absent directive helper ------------------------------------------- #
-    def _absent(self, rule, key, rel, secure_value, secure_set=None) -> List[Finding]:
+    def _absent(self, rule, key, rel, secure_value, secure_set=None,
+               *, text: str = "", section: str = "") -> List[Finding]:
         """Handle an absent directive, honoring secure-by-default versions."""
         default = rule.params.get("default_when_absent")
         is_secure_default = False
@@ -402,6 +499,7 @@ class ConfigScanner:
                 is_secure_default = str(default).lower() in secure_set
             elif secure_value is not None:
                 is_secure_default = _bool_equal(str(default), str(secure_value))
+        snippet = self._snippet_missing_key(text, section or rule.params.get("section", "general"), key) if text else ""
         if is_secure_default:
             absent_sev = rule.params.get("absent_severity")
             if not absent_sev:
@@ -410,16 +508,18 @@ class ConfigScanner:
             note = f" (default '{default}' since OJS {since})" if since else f" (default '{default}')"
             return [self._finding(rule, rel,
                                   f"'{key}' is not set; relying on the secure default{note}.",
-                                  severity=Severity.from_str(absent_sev))]
+                                  severity=Severity.from_str(absent_sev),
+                                  code_snippet=snippet)]
         return [self._finding(rule, rel,
-                              f"'{key}' is not set; the default '{default}' is insecure.")]
+                              f"'{key}' is not set; the default '{default}' is insecure.",
+                              code_snippet=snippet)]
 
     # -- Nginx --------------------------------------------------------------- #
-    def _load_nginx(self, nginx_paths: Optional[List[Path]]) -> Tuple[Optional[str], str]:
+    def _load_nginx(self, nginx_paths: Optional[List[Path]]) -> List[Tuple[str, str]]:
+        """Load nginx configs as a list of ``(text, label)`` per file."""
         if not nginx_paths:
-            return None, ""
-        texts: List[str] = []
-        labels: List[str] = []
+            return []
+        result: List[Tuple[str, str]] = []
         for p in nginx_paths:
             p = Path(p)
             files: List[Path] = []
@@ -429,13 +529,10 @@ class ConfigScanner:
                 files = [p]
             for f in files:
                 try:
-                    texts.append(f.read_text(encoding="utf-8", errors="replace"))
-                    labels.append(str(f))
+                    result.append((f.read_text(encoding="utf-8", errors="replace"), str(f)))
                 except OSError:  # pragma: no cover
                     continue
-        if not texts:
-            return None, ""
-        return "\n".join(texts), labels[0] if len(labels) == 1 else f"{labels[0]} (+{len(labels) - 1} more)"
+        return result
 
     def _run_nginx_check(self, rule: Rule, check: str, text: str, label: str) -> List[Finding]:
         handler = getattr(self, f"_check_{check}", None)
@@ -451,30 +548,40 @@ class ConfigScanner:
         for pat in patterns:
             if re.search(pat, text, re.IGNORECASE | re.DOTALL):
                 return []
+        snippet = build_missing_evidence_snippet(text, None, "upload PHP deny block")
         return [self._finding(rule, label,
                               "No Nginx rule denies access/execution under the uploads "
-                              "(files/public) directory.")]
+                              "(files/public) directory.",
+                              code_snippet=snippet)]
 
     def _check_nginx_security_headers(self, rule, text, label) -> List[Finding]:
         findings: List[Finding] = []
         low = text.lower()
         for header in rule.params.get("required_headers", []):
             if header.lower() not in low:
+                snippet = build_missing_evidence_snippet(text, None, f"header: {header}")
                 findings.append(self._finding(
                     rule, label,
                     f"Security header '{header}' is not configured.",
                     severity=rule.severity,
                     dedup_discriminator=header,
                     extra={"header": header},
+                    code_snippet=snippet,
                 ))
         return findings
 
     def _check_nginx_server_tokens(self, rule, text, label) -> List[Finding]:
         if re.search(r"server_tokens\s+off\s*;", text, re.IGNORECASE):
             return []
-        return [self._finding(rule, label, "'server_tokens off;' is not set; Nginx leaks its version.")]
+        snippet = build_missing_evidence_snippet(text, None, "server_tokens off")
+        return [self._finding(rule, label, "'server_tokens off;' is not set; Nginx leaks its version.",
+                              code_snippet=snippet)]
 
     def _check_nginx_autoindex(self, rule, text, label) -> List[Finding]:
-        if re.search(r"autoindex\s+on\s*;", text, re.IGNORECASE):
-            return [self._finding(rule, label, "'autoindex on;' enables directory listing.")]
+        m = re.search(r"autoindex\s+on\s*;", text, re.IGNORECASE)
+        if m:
+            line_no = text.count("\n", 0, m.start()) + 1
+            snippet = build_code_snippet(text, line_no)
+            return [self._finding(rule, label, "'autoindex on;' enables directory listing.",
+                                  code_snippet=snippet)]
         return []

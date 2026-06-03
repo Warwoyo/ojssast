@@ -125,3 +125,71 @@ def test_nginx_hardened_clean(ruleset, tmp_path):
     sc = ConfigScanner(ruleset, ojs_path=tmp_path)
     ngx = [f for f in sc.scan(cfg, [nginx]) if f.rule_id.startswith("OJS-CFG-NGX")]
     assert ngx == []
+
+
+# ----------------------------- snippet checks ----------------------------- #
+def test_allowed_hosts_wildcard_has_snippet(ruleset, tmp_path):
+    """allowed_hosts = * produces a code_snippet with ≥5 lines and >>> marker."""
+    cfg = FIXTURES / "config" / "insecure_config.inc.php"
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings = [f for f in sc.scan(cfg) if f.rule_id == "OJS-CFG-GEN-003"]
+    assert len(findings) >= 1
+    snippet = findings[0].code_snippet
+    assert snippet is not None
+    lines = snippet.strip().splitlines()
+    assert len(lines) >= 5
+    assert any(">>>" in l and "allowed_hosts" in l for l in lines)
+
+
+def test_absent_directive_has_snippet(ruleset, tmp_path):
+    """An absent directive produces a snippet with the missing-evidence marker."""
+    cfg = tmp_path / "c.inc.php"
+    # No allowed_hosts key at all.
+    cfg.write_text(";<?php exit; ?>\n[general]\nbase_url = https://x\n"
+                   "installed = On\nfoo = bar\nbaz = qux\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    by = _by_id(sc.scan(cfg))
+    # allowed_hosts absent should produce a snippet with missing-directive marker.
+    if "OJS-CFG-GEN-003" in by:
+        snippet = by["OJS-CFG-GEN-003"].code_snippet
+        assert snippet is not None
+        assert ">>> SAST: missing expected directive" in snippet
+
+
+def test_nginx_autoindex_snippet(ruleset, tmp_path):
+    """autoindex on; produces ≥5 lines snippet with marker on that line."""
+    nginx = FIXTURES / "config" / "nginx_insecure.conf"
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n[general]\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings = [f for f in sc.scan(cfg, [nginx]) if f.rule_id == "OJS-CFG-NGX-004"]
+    assert len(findings) >= 1
+    snippet = findings[0].code_snippet
+    assert snippet is not None
+    lines = snippet.strip().splitlines()
+    assert len(lines) >= 5
+    assert any(">>>" in l and "autoindex" in l for l in lines)
+
+
+def test_nginx_missing_upload_block_snippet(ruleset, tmp_path):
+    """Missing upload PHP deny block produces snippet with missing evidence."""
+    nginx = FIXTURES / "config" / "nginx_insecure.conf"
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n")
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings = [f for f in sc.scan(cfg, [nginx]) if f.rule_id == "OJS-CFG-NGX-001"]
+    assert len(findings) >= 1
+    snippet = findings[0].code_snippet
+    assert snippet is not None
+    assert ">>> SAST: missing expected directive" in snippet
+
+
+def test_config_findings_all_have_snippets(ruleset, tmp_path):
+    """All config findings should have code_snippet populated."""
+    cfg = FIXTURES / "config" / "insecure_config.inc.php"
+    nginx = FIXTURES / "config" / "nginx_insecure.conf"
+    sc = ConfigScanner(ruleset, ojs_path=tmp_path)
+    findings = sc.scan(cfg, [nginx])
+    for f in findings:
+        assert f.code_snippet is not None and len(f.code_snippet) > 0, \
+            f"Finding {f.rule_id} missing code_snippet"

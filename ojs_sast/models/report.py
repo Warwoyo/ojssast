@@ -51,6 +51,7 @@ def _to_finding(internal: "InternalFinding") -> Finding:
         code_snippet=internal.code_snippet,
         taint_path=None,
         confidence=internal.confidence,
+        cvss_score=internal.cvss_score,
     )
 
 

@@ -302,6 +302,13 @@
             white-space: pre;
             color: #0f172a;
         }
+        .code-line-hit {
+            background: #fef9c3;
+            display: block;
+            margin: 0 -16px;
+            padding: 0 16px;
+            border-left: 3px solid var(--severity-medium);
+        }
         .meta-tags { display: flex; gap: 8px; flex-wrap: wrap; }
         .meta-tag {
             background: var(--bg-tertiary);
@@ -689,10 +696,19 @@
             }
 
             if (f.code_snippet) {
+                const escaped = escapeHtml(f.code_snippet);
+                // Highlight lines starting with escaped '>>>' marker.
+                const lines = escaped.split('\n');
+                const highlighted = lines.map(line => {
+                    if (line.trimStart().startsWith('&gt;&gt;&gt;')) {
+                        return '<span class="code-line-hit">' + line + '</span>';
+                    }
+                    return line;
+                }).join('\n');
                 html += `
                 <div class="detail-section">
                     <h4>Code Snippet</h4>
-                    <div class="code-block">${escapeHtml(f.code_snippet)}</div>
+                    <div class="code-block">${highlighted}</div>
                 </div>`;
             }
 

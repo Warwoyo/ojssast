@@ -70,9 +70,11 @@ class Finding:
     code_snippet: Optional[str] = None
     taint_path: Optional[TaintPath] = None
     confidence: str = "medium"
+    cvss_score: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "finding_id": f"{self.rule_id}:{self.file_path}:{self.line_start}",
             "rule_id": self.rule_id,
             "name": self.name,
             "severity": self.severity.value,
@@ -85,6 +87,7 @@ class Finding:
             "remediation": self.remediation,
             "cwe": self.cwe,
             "owasp": self.owasp,
+            "cvss_score": self.cvss_score,
             "references": list(self.references),
             "code_snippet": self.code_snippet,
             "confidence": self.confidence,

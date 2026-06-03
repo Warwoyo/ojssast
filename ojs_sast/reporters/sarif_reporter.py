@@ -5,11 +5,16 @@ Generates reports compatible with GitHub Code Scanning and VS Code SARIF Viewer.
 
 import json
 import os
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ojs_sast.constants import __version__
 from ojs_sast.models.finding import Finding
 from ojs_sast.models.report import ScanReport
 from ojs_sast.utils.logger import logger
+
+if TYPE_CHECKING:
+    from ojs_sast.models import ScanResult
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
 SARIF_VERSION = "2.1.0"
@@ -86,29 +91,41 @@ def _build_rule(finding: Finding) -> dict:
     
     if finding.cwe:
         rule["properties"]["tags"].append(finding.cwe)
+        # Canonical external/cwe/ tag used by GitHub Code Scanning.
+        cwe_num = finding.cwe.lower().replace("cwe-", "")
+        rule["properties"]["tags"].append(f"external/cwe/cwe-{cwe_num}")
     if finding.owasp:
         rule["properties"]["tags"].append(finding.owasp)
+
+    # CVSS-like security-severity score.
+    f_dict = finding.to_dict()
+    cvss = f_dict.get("cvss_score") if hasattr(finding, "to_dict") else None
+    if cvss is not None:
+        rule["properties"]["security-severity"] = str(cvss)
 
     return rule
 
 
 def _build_result(finding: Finding) -> dict:
     """Build a SARIF result from a finding."""
+    phys_loc: dict = {
+        "artifactLocation": {
+            "uri": finding.file_path,
+        },
+    }
+    # Only include region when we have an actual line number.
+    if finding.line_start > 0:
+        phys_loc["region"] = {
+            "startLine": finding.line_start,
+            "endLine": max(finding.line_start, finding.line_end),
+        }
     result: dict = {
         "ruleId": finding.rule_id,
         "level": _severity_to_level(finding.severity.value),
         "message": {"text": finding.description},
         "locations": [
             {
-                "physicalLocation": {
-                    "artifactLocation": {
-                        "uri": finding.file_path,
-                    },
-                    "region": {
-                        "startLine": max(1, finding.line_start),
-                        "endLine": max(1, finding.line_end),
-                    },
-                }
+                "physicalLocation": phys_loc,
             }
         ],
     }
@@ -183,3 +200,45 @@ def _severity_to_level(severity: str) -> str:
         "INFO": "note",
     }
     return mapping.get(severity, "warning")
+
+
+def render_sarif(result: "ScanResult") -> str:
+    """Render a SARIF report string from an internal ScanResult."""
+    report = ScanReport.from_scan_result(result)
+    # Reuse generate logic inline.
+    rules_map: dict[str, dict] = {}
+    for finding in report.findings:
+        if finding.rule_id not in rules_map:
+            rules_map[finding.rule_id] = _build_rule(finding)
+    sarif = {
+        "$schema": SARIF_SCHEMA,
+        "version": SARIF_VERSION,
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "ojs-sast",
+                        "version": __version__,
+                        "informationUri": "https://github.com/ojs-sast/ojs-sast",
+                        "rules": list(rules_map.values()),
+                    }
+                },
+                "results": [_build_result(f) for f in report.findings],
+                "invocations": [
+                    {
+                        "executionSuccessful": True,
+                        "startTimeUtc": report.timestamp,
+                    }
+                ],
+            }
+        ],
+    }
+    return json.dumps(sarif, indent=2, ensure_ascii=False)
+
+
+def write_sarif_report(result: "ScanResult", output_dir) -> Path:
+    """Write a SARIF report to disk and return the Path."""
+    text = render_sarif(result)
+    out = Path(output_dir) / "report.sarif"
+    out.write_text(text, encoding="utf-8")
+    return out

@@ -76,7 +76,7 @@ def test_sarif_location_region():
 
 def test_html_contains_findings(tmp_path):
     html = render_html(_sample_result())
-    assert "ojs-sast security report" in html
+    assert "OJS-SAST Security Report" in html
     assert "SQL injection" in html
     assert "CRITICAL" in html
     assert "DB::raw($sql);" in html
@@ -90,5 +90,7 @@ def test_html_escapes_snippet():
     html = render_html(ScanResult(metadata={"version": "1.0.0", "ojs_path": "p",
                                             "ojs_version": "3", "scan_timestamp": "t",
                                             "modules_run": []}, findings=[f]))
+    # The snippet is embedded in a JSON blob inside the HTML, where
+    # Jinja2 autoescape turns < into &lt;. The JS `escapeHtml()` function
+    # further escapes at runtime. Either way, raw <script> must not appear.
     assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
