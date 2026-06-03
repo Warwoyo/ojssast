@@ -52,6 +52,18 @@ _SEVERITY_RANK: Dict[Severity, int] = {
 }
 
 
+_MODULE_TO_CATEGORY = {
+    "source_code": "source_code",
+    "config": "config",
+    "upload_directory": "uploaded_file",
+}
+
+
+def category_for_module(module: str) -> str:
+    """Return the reporter-facing category for an internal scanner module."""
+    return _MODULE_TO_CATEGORY.get(module, module)
+
+
 # SARIF maps severities onto level + security-severity (CVSS-like) values.
 SARIF_LEVEL = {
     Severity.CRITICAL: "error",
@@ -236,20 +248,25 @@ class Finding:
             "rule_id": self.rule_id,
             "module": self.module,
             "severity": self.severity.value,
+            "category": category_for_module(self.module),
             "file_path": self.file_path,
             "line": self.line,
+            "line_start": self.line or 0,
             "column": self.column,
             "title": self.title,
+            "name": self.title or self.rule_id,
             "detail": self.detail,
+            "description": self.detail or "",
             "cwe": self.cwe,
             "owasp": self.owasp,
             "cvss_score": self.cvss_score,
             "cve_references": list(self.cve_references),
+            "references": list(self.cve_references),
             "code_snippet": self.code_snippet,
             "ground_truth": ground_truth,
             "evaluation_scope": evaluation_scope,
-            **({"rule_origin": rule_origin} if rule_origin else {}),
-            **({"rule_family": rule_family} if rule_family else {}),
+            "rule_origin": rule_origin,
+            "rule_family": rule_family,
             "layer": self.layer,
             "actual_mime": self.actual_mime,
             "declared_extension": self.declared_extension,

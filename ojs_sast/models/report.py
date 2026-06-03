@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from ojs_sast.constants import __version__
+from ojs_sast.models import category_for_module
 from ojs_sast.models.finding import Category, Finding
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -24,11 +25,7 @@ _SEVERITY_KEYS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
 # Internal detector module names map onto the presentation categories used by
 # the HTML template filters.
-_MODULE_TO_CATEGORY = {
-    "source_code": Category.SOURCE_CODE,
-    "config": Category.CONFIG,
-    "upload_directory": Category.UPLOADED_FILE,
-}
+_CATEGORY_VALUES = {category.value: category for category in Category}
 
 
 def _to_finding(internal: "InternalFinding") -> Finding:
@@ -38,7 +35,7 @@ def _to_finding(internal: "InternalFinding") -> Finding:
         rule_id=internal.rule_id,
         name=internal.title or internal.rule_id,
         severity=internal.severity,
-        category=_MODULE_TO_CATEGORY.get(internal.module, Category.SOURCE_CODE),
+        category=_CATEGORY_VALUES.get(category_for_module(internal.module), Category.SOURCE_CODE),
         file_path=internal.file_path,
         line_start=line,
         line_end=line,

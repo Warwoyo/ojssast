@@ -107,8 +107,8 @@ class Finding:
             "code_snippet": self.code_snippet,
             "ground_truth": ground_truth,
             "evaluation_scope": evaluation_scope,
-            **({"rule_origin": rule_origin} if rule_origin else {}),
-            **({"rule_family": rule_family} if rule_family else {}),
+            "rule_origin": rule_origin,
+            "rule_family": rule_family,
             "confidence": self.confidence,
             "taint_path": self.taint_path.to_dict() if self.taint_path else None,
         }
