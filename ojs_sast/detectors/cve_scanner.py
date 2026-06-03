@@ -21,7 +21,11 @@ from ..helpers.php_utils import (
     extract_class_body,
     extract_function_body,
     find_all_pattern_lines,
+    find_all_pattern_spans,
     find_pattern_line,
+    find_pattern_span,
+    find_request_variables,
+    find_unserialize_sinks,
     has_pattern_in_function,
 )
 from ..helpers.smarty_utils import (
@@ -79,20 +83,26 @@ class CVEScanner:
             params = rule.params
             file_patterns = params.get("file_path_patterns", [])
             if not file_patterns:
+                logger.debug("CVE %s: no file_path_patterns defined, skipping", rule.id)
                 continue
 
             if not matches_cve_path(rel, file_patterns):
+                logger.debug("CVE %s: path '%s' does not match %s", rule.id, rel, file_patterns)
                 continue
 
             vuln_type = params.get("vulnerability_type", "")
             detector = self._detectors.get(vuln_type)
             if detector is None:
-                logger.debug("No detector for type %s (rule %s)", vuln_type, rule.id)
+                logger.debug("CVE %s: no detector for vulnerability_type '%s'", rule.id, vuln_type)
                 continue
 
+            logger.debug("CVE %s: evaluating '%s' with detector '%s'", rule.id, rel, vuln_type)
             result = detector.evaluate(rule, rel, text, self.ojs_version)
             if result is not None:
+                logger.debug("CVE %s: FINDING emitted for '%s'", rule.id, rel)
                 findings.append(result)
+            else:
+                logger.debug("CVE %s: no finding for '%s'", rule.id, rel)
 
         return findings
 
@@ -377,38 +387,48 @@ class _CodeInjectionDetector(_BaseDetector):
 
 
 class _SmartyXSSDetector(_BaseDetector):
-    """Detect Smarty template XSS CVEs (e.g. CVE-2025-13469, CVE-2023-5903)."""
+    """Detect Smarty template XSS CVEs (e.g. CVE-2025-13469, CVE-2023-5903).
+
+    Uses DOTALL multiline matching so Smarty tags and HTML attributes that span
+    multiple lines are correctly detected.
+    """
 
     def evaluate(self, rule, rel, source, ojs_version):
         params = rule.params
 
-        # Version check.
+        # 1) Version check.
         affected, version_reason = is_version_affected(
             ojs_version,
             params.get("affected_versions"),
             params.get("patched_versions"),
         )
         if not affected:
+            logger.debug("CVE %s: version %s not in affected range", rule.id, ojs_version)
             return None
 
-        # Check safe-patch patterns first.
+        # 2) Safe-patch patterns at file level.
         is_patched, checked = self._check_safe_patches(
             source, params.get("safe_patch_patterns", [])
         )
         if is_patched:
+            logger.debug("CVE %s: safe patch pattern found at file level", rule.id)
             return None
 
-        # Source + sink patterns — for Smarty, these are usually the same
-        # (the variable IS the output sink in the template).
+        # 3) Sink patterns with DOTALL multiline matching.
         sink_patterns = params.get("sink_patterns", [])
+        source_patterns = params.get("source_patterns", [])
+
         for pat in sink_patterns:
-            hit = find_pattern_line(source, pat, re.IGNORECASE)
+            hit = find_pattern_span(
+                source, pat,
+                re.IGNORECASE | re.DOTALL | re.MULTILINE,
+            )
             if hit:
-                line_no, snippet = hit
-
-                source_patterns = params.get("source_patterns", [])
+                logger.debug(
+                    "CVE %s: sink pattern matched at line %d (snippet: %r)",
+                    rule.id, hit.line_start, (hit.snippet or "")[:80],
+                )
                 src_pat = source_patterns[0] if source_patterns else pat
-
                 confidence = "high" if ojs_version else "medium"
                 conf_reason = params.get("confidence_reason", "")
                 if not ojs_version:
@@ -417,8 +437,8 @@ class _SmartyXSSDetector(_BaseDetector):
                 return self._make_finding(
                     rule=rule,
                     rel=rel,
-                    line=line_no,
-                    snippet=snippet,
+                    line=hit.line_start,
+                    snippet=hit.snippet or "",
                     matched_source=src_pat,
                     matched_sink=pat,
                     missing_patch_evidence=f"Safe patterns not found: {checked}",
@@ -428,6 +448,8 @@ class _SmartyXSSDetector(_BaseDetector):
                     confidence_reason=conf_reason,
                     source_text=source,
                 )
+
+        logger.debug("CVE %s: no sink pattern matched in %s", rule.id, rel)
         return None
 
 
@@ -453,13 +475,98 @@ class _HostHeaderDetector(_BaseDetector):
 
 
 class _DeserializationDetector(_BaseDetector):
-    """Detect deserialization CVEs (e.g. CVE-2019-19909)."""
+    """Detect unsafe deserialization CVEs (e.g. CVE-2019-19909).
+
+    Evaluation order: function body → class body → full file.
+    Safe-patch check is scoped to the same text as source/sink search so that
+    json_decode() in an unrelated function does not suppress the finding.
+    """
 
     def evaluate(self, rule, rel, source, ojs_version):
         params = rule.params
+
+        # 1) Version check.
+        affected, version_reason = is_version_affected(
+            ojs_version,
+            params.get("affected_versions"),
+            params.get("patched_versions"),
+        )
+        if not affected:
+            logger.debug("CVE %s: version %s not in affected range", rule.id, ojs_version)
+            return None
+
+        # 2) Determine analysis scope: function → class → full file.
         fn_name = params.get("function_name")
-        scope = None
+        class_name = params.get("class_name")
+        scope: Optional[str] = None
+        scope_label = "full file"
+
         if fn_name:
             scope = extract_function_body(source, fn_name)
-            # If function not found, fall back to full-file analysis.
-        return self._standard_evaluate(rule, rel, source, ojs_version, scope)
+            if scope:
+                scope_label = f"function {fn_name}"
+                logger.debug("CVE %s: using function scope '%s'", rule.id, fn_name)
+            else:
+                logger.debug(
+                    "CVE %s: function '%s' not found, trying class scope", rule.id, fn_name
+                )
+                if class_name:
+                    scope = extract_class_body(source, class_name)
+                    if scope:
+                        scope_label = f"class {class_name}"
+                    else:
+                        logger.debug(
+                            "CVE %s: class '%s' not found, falling back to full file",
+                            rule.id, class_name,
+                        )
+                else:
+                    logger.debug("CVE %s: no class_name, falling back to full file", rule.id)
+
+        check_text = scope if scope else source
+
+        # 3) Scope-aware safe-patch check (prevents json_decode in another
+        #    function from suppressing a finding in generateReport).
+        is_patched, checked = self._check_safe_patches(
+            check_text, params.get("safe_patch_patterns", [])
+        )
+        if is_patched:
+            logger.debug("CVE %s: safe patch found in scope (%s)", rule.id, scope_label)
+            return None
+
+        # 4) Source patterns.
+        source_hit = self._check_source_patterns(source, params.get("source_patterns", []), scope)
+        if source_hit is None:
+            logger.debug("CVE %s: source pattern not found in scope (%s)", rule.id, scope_label)
+            return None
+        src_pat, src_line, src_snippet = source_hit
+
+        # 5) Sink patterns.
+        sink_hit = self._check_sink_patterns(source, params.get("sink_patterns", []), scope)
+        if sink_hit is None:
+            logger.debug("CVE %s: sink pattern not found in scope (%s)", rule.id, scope_label)
+            return None
+        sink_pat, sink_line, sink_snippet = sink_hit
+
+        confidence = "high" if ojs_version else "medium"
+        conf_reason = params.get("confidence_reason", "")
+        if not ojs_version:
+            conf_reason += f" (version unknown — confidence reduced; scope: {scope_label})"
+
+        logger.debug(
+            "CVE %s: FINDING — source line %d, sink line %d (scope: %s)",
+            rule.id, src_line, sink_line, scope_label,
+        )
+        return self._make_finding(
+            rule=rule,
+            rel=rel,
+            line=sink_line,
+            snippet=sink_snippet,
+            matched_source=src_pat,
+            matched_sink=sink_pat,
+            missing_patch_evidence=f"Safe patterns not found: {checked}",
+            safe_patch_checked=checked,
+            version_reasoning=version_reason,
+            confidence=confidence,
+            confidence_reason=conf_reason,
+            source_text=source,
+        )

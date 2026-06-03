@@ -10,6 +10,16 @@ _SAFE_MODIFIERS = re.compile(
     r"\|(?:escape|strip_unsafe_html|htmlspecialchars)", re.IGNORECASE
 )
 
+# Matches |escape modifier (optionally with :'html' or :"html")
+_ESCAPE_MODIFIER = re.compile(
+    r"\|\s*escape(?:\s*:\s*['\"]?html['\"]?)?", re.IGNORECASE
+)
+
+
+def smarty_expression_is_escaped(expr: str) -> bool:
+    """Return True if a Smarty expression contains a safe |escape modifier."""
+    return bool(_ESCAPE_MODIFIER.search(expr))
+
 
 def find_smarty_variable(
     template: str,
@@ -19,26 +29,28 @@ def find_smarty_variable(
 ) -> List[Tuple[int, str, str]]:
     """Find Smarty tags matching ``variable_pattern`` in template text.
 
+    Multiline-aware: uses DOTALL so tags spanning multiple lines are handled.
+
     Args:
         template: The full .tpl file content.
-        variable_pattern: Regex pattern for the variable (e.g. ``r"\\$manualInstructions"``).
-        require_no_escape: If True, only return tags lacking |escape or |strip_unsafe_html.
+        variable_pattern: Regex for the variable (e.g. ``r"\\$manualInstructions"``).
+        require_no_escape: If True, skip tags that already contain |escape.
 
     Returns:
         List of (line_number, full_tag, line_text) tuples.
     """
     results: List[Tuple[int, str, str]] = []
-    lines = template.splitlines()
-
-    # Match Smarty tags containing the variable.
-    tag_re = re.compile(r"\{[^}]*" + variable_pattern + r"[^}]*\}")
-
-    for i, line in enumerate(lines, 1):
-        for m in tag_re.finditer(line):
-            tag = m.group(0)
-            if require_no_escape and _SAFE_MODIFIERS.search(tag):
-                continue
-            results.append((i, tag, line.strip()))
+    tag_re = re.compile(
+        r"\{[^{}]*" + variable_pattern + r"[^{}]*\}",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in tag_re.finditer(template):
+        tag = m.group(0)
+        if require_no_escape and _SAFE_MODIFIERS.search(tag):
+            continue
+        line_start = template.count("\n", 0, m.start()) + 1
+        line_text = tag.replace("\n", " ").strip()
+        results.append((line_start, tag, line_text))
     return results
 
 
@@ -47,23 +59,23 @@ def find_translate_tag(
     key_pattern: Optional[str] = None,
     param_pattern: Optional[str] = None,
 ) -> List[Tuple[int, str, str]]:
-    """Find Smarty {translate ...} tags optionally matching key and param patterns.
+    """Find Smarty {translate ...} tags — multiline aware.
 
     Returns:
         List of (line_number, full_tag, line_text) tuples.
     """
     results: List[Tuple[int, str, str]] = []
-    lines = template.splitlines()
-    tag_re = re.compile(r"\{translate\b[^}]*\}", re.IGNORECASE)
+    tag_re = re.compile(r"\{translate\b[^{}]*\}", re.IGNORECASE | re.DOTALL)
 
-    for i, line in enumerate(lines, 1):
-        for m in tag_re.finditer(line):
-            tag = m.group(0)
-            if key_pattern and not re.search(key_pattern, tag, re.IGNORECASE):
-                continue
-            if param_pattern and not re.search(param_pattern, tag, re.IGNORECASE):
-                continue
-            results.append((i, tag, line.strip()))
+    for m in tag_re.finditer(template):
+        tag = m.group(0)
+        if key_pattern and not re.search(key_pattern, tag, re.IGNORECASE | re.DOTALL):
+            continue
+        if param_pattern and not re.search(param_pattern, tag, re.IGNORECASE | re.DOTALL):
+            continue
+        line_start = template.count("\n", 0, m.start()) + 1
+        line_text = tag.replace("\n", " ").strip()
+        results.append((line_start, tag, line_text))
     return results
 
 
@@ -72,22 +84,30 @@ def find_html_attribute_variable(
     attribute_name: str,
     variable_pattern: str,
 ) -> List[Tuple[int, str, str]]:
-    """Find HTML attributes where a Smarty variable is used without |escape.
+    """Find HTML input tags where a Smarty variable appears without |escape.
 
-    E.g. ``value="{$authors}"`` without ``|escape``.
+    Multiline-aware: extracts ``<input ...>`` blocks spanning multiple lines.
 
     Returns:
         List of (line_number, full_match, line_text) tuples.
     """
     results: List[Tuple[int, str, str]] = []
-    lines = template.splitlines()
-    # Match: attribute="...{$variable}..."
-    attr_re = re.compile(
-        re.escape(attribute_name) + r'\s*=\s*"[^"]*\{' + variable_pattern + r'(?!\|escape)[^}]*\}[^"]*"',
-        re.IGNORECASE,
+
+    # Match entire <input ...> blocks (may span lines).
+    input_tag_re = re.compile(r"<input\b[^>]*>", re.IGNORECASE | re.DOTALL)
+
+    # Within a tag block: attribute="{$variable}" without |escape.
+    attr_val_re = re.compile(
+        re.escape(attribute_name)
+        + r'\s*=\s*["\']?\s*\{' + variable_pattern
+        + r'(?!\s*\|\s*escape)[^}]*\}',
+        re.IGNORECASE | re.DOTALL,
     )
 
-    for i, line in enumerate(lines, 1):
-        for m in attr_re.finditer(line):
-            results.append((i, m.group(0), line.strip()))
+    for tag_m in input_tag_re.finditer(template):
+        tag = tag_m.group(0)
+        if attr_val_re.search(tag):
+            line_start = template.count("\n", 0, tag_m.start()) + 1
+            line_text = tag.replace("\n", " ").strip()
+            results.append((line_start, tag, line_text))
     return results
