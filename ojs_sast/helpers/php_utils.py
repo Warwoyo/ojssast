@@ -3,7 +3,38 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+
+@dataclass
+class PatternMatch:
+    pattern: str
+    start: int
+    end: int
+    line_start: int
+    line_end: int
+    snippet: str | None = None
+
+
+def find_pattern_span(
+    source: str,
+    pattern: str,
+    flags: int = re.IGNORECASE | re.MULTILINE | re.DOTALL,
+) -> Optional[PatternMatch]:
+    """Find the first regex match and return its span, line range, and snippet."""
+    match = re.search(pattern, source, flags)
+    if match is None:
+        return None
+
+    return PatternMatch(
+        pattern=pattern,
+        start=match.start(),
+        end=match.end(),
+        line_start=source.count("\n", 0, match.start()) + 1,
+        line_end=source.count("\n", 0, match.end()) + 1,
+        snippet=match.group(0).strip(),
+    )
 
 
 def extract_function_body(source: str, function_name: str) -> Optional[str]:
