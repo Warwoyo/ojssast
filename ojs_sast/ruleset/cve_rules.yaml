@@ -261,11 +261,11 @@ rules:
       source_patterns:
         - "getLocalizedTitle\\(\\)"
       sink_patterns:
-        - "\\{translate.*name=.*getLocalizedTitle\\(\\)(?!\\|escape)"
-      safe_patch_patterns:
-        - "getLocalizedTitle\\(\\)\\|escape"
+        - "\\{[^{}]*getLocalizedTitle\\s*\\(\\s*\\)(?!\\s*\\|\\s*escape)[^{}]*\\}"
+      safe_patch_patterns: []
       confidence_reason: >-
-        {translate} tag in submissions.tpl uses getLocalizedTitle() without |escape.
+        {translate} or {$section->...} tag in submissions.tpl uses getLocalizedTitle() without |escape.
+        The sink pattern uses a negative lookahead to exclude escaped expressions inline.
 
   # ===== STORED XSS: Issue Title (PHP) =====================================
   - id: CVE-SRC-008
@@ -412,13 +412,14 @@ rules:
       function_name: generateReport
       source_patterns:
         - "getUserVar\\s*\\(\\s*['\"]filters['\"]"
-        - "getUserVar\\s*\\(.*orderBy"
+        - "getUserVar\\s*\\(\\s*['\"]orderBy['\"]"
+        - "getUserVar\\s*\\(.*(?:filters|orderBy)"
       sink_patterns:
-        - "unserialize\\s*\\("
+        - "@?unserialize\\s*\\("
       safe_patch_patterns:
         - "json_decode\\s*\\("
       confidence_reason: >-
-        getUserVar('filters') passed to unserialize() in report generation flow.
+        getUserVar('filters'/'orderBy') passed to unserialize() in report generation flow.
 
   # ===== REFLECTED XSS: Search Page ========================================
   - id: CVE-SRC-012
@@ -445,9 +446,9 @@ rules:
       source_patterns:
         - "\\$authors"
       sink_patterns:
-        - 'value="\{\\$authors\}"'
-        - "\\{\\$authors(?!\\|escape)[^}]*\\}"
+        - "value\\s*=\\s*[\"']?\\s*\\{\\s*\\$authors\\b(?![^}]*\\|\\s*escape)[^}]*\\}"
+        - "\\{\\$authors\\b(?!\\s*\\|\\s*escape)[^}]*\\}"
       safe_patch_patterns:
-        - "\\$authors\\|escape"
+        - "\\$authors\\s*\\|\\s*escape"
       confidence_reason: >-
         {$authors} in search.tpl value attribute without |escape modifier.
