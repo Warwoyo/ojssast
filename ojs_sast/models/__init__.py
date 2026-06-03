@@ -100,6 +100,39 @@ class Rule:
         }
 
 
+def resolve_rule_metadata(rule_id: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Resolve evaluation metadata for a rule id and optional rule params.
+
+    Rule params may explicitly override the default ground-truth/scope mapping
+    and can also provide optional reporting classifiers such as rule_origin and
+    rule_family.
+    """
+    params = params or {}
+    metadata: Dict[str, Any] = {
+        "ground_truth": None,
+        "evaluation_scope": None,
+        "rule_origin": None,
+        "rule_family": None,
+    }
+
+    if rule_id.startswith("CVE-SRC-"):
+        metadata.update(ground_truth=True, evaluation_scope="ground_truth")
+    elif rule_id.startswith(("OJS-CFG-NGX-", "OJS-CFG-EXT-")):
+        metadata.update(ground_truth=False, evaluation_scope="extension")
+    elif rule_id.startswith("OJS-CFG-"):
+        metadata.update(ground_truth=True, evaluation_scope="ground_truth")
+    elif rule_id.startswith("RULE-UPLOAD-"):
+        metadata.update(ground_truth=False, evaluation_scope="upload")
+    elif rule_id.startswith("RULE-SRC-"):
+        metadata.update(ground_truth=False, evaluation_scope="generic")
+
+    for key in ("ground_truth", "evaluation_scope", "rule_origin", "rule_family"):
+        if key in params and params[key] is not None:
+            metadata[key] = params[key]
+
+    return metadata
+
+
 @dataclass
 class RuleMatch:
     """A raw match produced by the regex/AST engines before becoming a Finding."""
@@ -131,6 +164,10 @@ class Finding:
     cvss_score: Optional[float] = None
     cve_references: List[str] = field(default_factory=list)
     code_snippet: Optional[str] = None
+    ground_truth: Optional[bool] = None
+    evaluation_scope: Optional[str] = None
+    rule_origin: Optional[str] = None
+    rule_family: Optional[str] = None
 
     # Module-specific fields (kept optional so the schema stays uniform).
     layer: Optional[str] = None  # upload module layer
@@ -178,10 +215,22 @@ class Finding:
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
             code_snippet=match.snippet or None,
+            **resolve_rule_metadata(rule.id, rule.params),
             extra=dict(match.extra),
         )
 
     def to_dict(self) -> Dict[str, Any]:
+        metadata = resolve_rule_metadata(self.rule_id)
+        ground_truth = (
+            self.ground_truth if self.ground_truth is not None else metadata["ground_truth"]
+        )
+        evaluation_scope = (
+            self.evaluation_scope
+            if self.evaluation_scope is not None
+            else metadata["evaluation_scope"]
+        )
+        rule_origin = self.rule_origin if self.rule_origin is not None else metadata["rule_origin"]
+        rule_family = self.rule_family if self.rule_family is not None else metadata["rule_family"]
         return {
             "finding_id": self.finding_id,
             "rule_id": self.rule_id,
@@ -197,6 +246,10 @@ class Finding:
             "cvss_score": self.cvss_score,
             "cve_references": list(self.cve_references),
             "code_snippet": self.code_snippet,
+            "ground_truth": ground_truth,
+            "evaluation_scope": evaluation_scope,
+            **({"rule_origin": rule_origin} if rule_origin else {}),
+            **({"rule_family": rule_family} if rule_family else {}),
             "layer": self.layer,
             "actual_mime": self.actual_mime,
             "declared_extension": self.declared_extension,

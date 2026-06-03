@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..helpers.snippet_utils import build_code_snippet
-from ..models import Finding, Rule, Severity
+from ..models import Finding, Rule, Severity, resolve_rule_metadata
 from ..ruleset.loader import Ruleset
 
 logger = logging.getLogger("ojs_sast.source")
@@ -518,6 +518,10 @@ class PHPTaintAnalyzer:
 
         pretty_source = label.split(":", 1)[1] if label.startswith("filename:") else label
         detail = f"Tainted data from {pretty_source} reaches {sink_desc} without sanitization."
+        metadata = (
+            resolve_rule_metadata(rule.id, rule.params)
+            if rule else resolve_rule_metadata(rule_id)
+        )
         self.findings.append(Finding(
             rule_id=rule_id,
             module="source_code",
@@ -532,6 +536,7 @@ class PHPTaintAnalyzer:
             owasp=owasp,
             cvss_score=cvss,
             cve_references=cves,
+            **metadata,
             code_snippet=build_code_snippet(self._source_text, line),
             taint_source=pretty_source,
             confidence="high",
@@ -582,6 +587,7 @@ class RegexEngine:
                     owasp=rule.owasp,
                     cvss_score=rule.cvss_score,
                     cve_references=list(rule.cve_references),
+                    **resolve_rule_metadata(rule.id, rule.params),
                     code_snippet=build_code_snippet(text, line_no),
                     confidence="medium",
                 ))
@@ -670,6 +676,10 @@ def scan_smarty(file_path: str, text: str, rule: Optional[Rule]) -> List[Finding
 
         line_no = text.count("\n", 0, m.start()) + 1
         line_text = lines[line_no - 1].strip() if 0 <= line_no - 1 < len(lines) else tag
+        metadata = (
+            resolve_rule_metadata(rule.id, rule.params)
+            if rule else resolve_rule_metadata("RULE-SRC-001")
+        )
         findings.append(Finding(
             rule_id=rule.id if rule else "RULE-SRC-001",
             module="source_code",
@@ -685,6 +695,7 @@ def scan_smarty(file_path: str, text: str, rule: Optional[Rule]) -> List[Finding
             owasp=rule.owasp if rule else "A03:2021",
             cvss_score=rule.cvss_score if rule else 6.1,
             cve_references=list(rule.cve_references) if rule else [],
+            **metadata,
             code_snippet=build_code_snippet(text, line_no),
             confidence="medium",
         ))
@@ -734,6 +745,10 @@ def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Findi
 
     def _make_finding(cls_name, mname, line_no, col, detail):
         src_text = source.decode("utf-8", "replace")
+        metadata = (
+            resolve_rule_metadata(rule.id, rule.params)
+            if rule else resolve_rule_metadata("RULE-SRC-003")
+        )
         return Finding(
             rule_id=rule.id if rule else "RULE-SRC-003",
             module="source_code",
@@ -748,6 +763,7 @@ def scan_csrf(file_path: str, source: bytes, rule: Optional[Rule]) -> List[Findi
             owasp=rule.owasp if rule else "A01:2021",
             cvss_score=rule.cvss_score if rule else 4.3,
             cve_references=list(rule.cve_references) if rule else [],
+            **metadata,
             code_snippet=build_code_snippet(src_text, line_no),
             confidence="low",
         )

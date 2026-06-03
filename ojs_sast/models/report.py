@@ -52,6 +52,10 @@ def _to_finding(internal: "InternalFinding") -> Finding:
         taint_path=None,
         confidence=internal.confidence,
         cvss_score=internal.cvss_score,
+        ground_truth=internal.ground_truth,
+        evaluation_scope=internal.evaluation_scope,
+        rule_origin=internal.rule_origin,
+        rule_family=internal.rule_family,
     )
 
 

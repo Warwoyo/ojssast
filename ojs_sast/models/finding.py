@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from ojs_sast.models import Severity
+from ojs_sast.models import Severity, resolve_rule_metadata
 
 
 class Category(Enum):
@@ -71,8 +71,23 @@ class Finding:
     taint_path: Optional[TaintPath] = None
     confidence: str = "medium"
     cvss_score: Optional[float] = None
+    ground_truth: Optional[bool] = None
+    evaluation_scope: Optional[str] = None
+    rule_origin: Optional[str] = None
+    rule_family: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        metadata = resolve_rule_metadata(self.rule_id)
+        ground_truth = (
+            self.ground_truth if self.ground_truth is not None else metadata["ground_truth"]
+        )
+        evaluation_scope = (
+            self.evaluation_scope
+            if self.evaluation_scope is not None
+            else metadata["evaluation_scope"]
+        )
+        rule_origin = self.rule_origin if self.rule_origin is not None else metadata["rule_origin"]
+        rule_family = self.rule_family if self.rule_family is not None else metadata["rule_family"]
         return {
             "finding_id": f"{self.rule_id}:{self.file_path}:{self.line_start}",
             "rule_id": self.rule_id,
@@ -90,6 +105,10 @@ class Finding:
             "cvss_score": self.cvss_score,
             "references": list(self.references),
             "code_snippet": self.code_snippet,
+            "ground_truth": ground_truth,
+            "evaluation_scope": evaluation_scope,
+            **({"rule_origin": rule_origin} if rule_origin else {}),
+            **({"rule_family": rule_family} if rule_family else {}),
             "confidence": self.confidence,
             "taint_path": self.taint_path.to_dict() if self.taint_path else None,
         }

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..helpers.snippet_utils import build_code_snippet, build_missing_evidence_snippet
-from ..models import Finding, Rule, Severity
+from ..models import Finding, Rule, Severity, resolve_rule_metadata
 from ..ruleset.loader import Ruleset
 
 logger = logging.getLogger("ojs_sast.config")
@@ -187,8 +187,6 @@ class ConfigScanner:
     def _finding(self, rule: Rule, file_path: str, detail: str,
                  severity: Optional[Severity] = None, **kw) -> Finding:
         extra = dict(kw.pop("extra", {}))
-        if rule.params.get("ground_truth") is False:
-            extra["ground_truth"] = False
         return Finding(
             rule_id=rule.id,
             module="config",
@@ -201,6 +199,7 @@ class ConfigScanner:
             owasp=rule.owasp,
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
+            **resolve_rule_metadata(rule.id, rule.params),
             confidence="high",
             extra=extra,
             **kw,
