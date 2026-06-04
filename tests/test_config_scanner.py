@@ -296,3 +296,61 @@ def test_regression_informational_rules(ruleset, tmp_path):
     assert by["OJS-CFG-GEN-009"].extra.get("do_not_flag") is True
     assert by["OJS-CFG-GEN-010"].severity.value == "INFO"
     assert by["OJS-CFG-GEN-010"].extra.get("do_not_flag") is True
+
+
+# ----------------------------- version-aware applicability ---------------- #
+def _force_ssl_off_config(tmp_path):
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n[security]\nforce_ssl = Off\n")
+    return cfg
+
+
+def test_config_scanner_skips_non_applicable_gt_rule_for_ojs24(ruleset, tmp_path):
+    """OJS-CFG-SEC-001 (force_ssl, OJS 3.3+) is skipped on an OJS 2.4 scan."""
+    cfg = _force_ssl_off_config(tmp_path)
+    sc24 = ConfigScanner(ruleset, ojs_path=tmp_path, ojs_version="2.4.7-1")
+    ids24 = _ids(sc24.scan(cfg))
+    assert "OJS-CFG-SEC-001" not in ids24
+    # No ground-truth config rule should survive on OJS 2.4.
+    assert not any(
+        rid.startswith("OJS-CFG-") and not rid.startswith(("OJS-CFG-NGX-", "OJS-CFG-EXT-"))
+        for rid in ids24
+    )
+    # Unknown version stays conservative: the rule still runs.
+    sc_none = ConfigScanner(ruleset, ojs_path=tmp_path)
+    assert "OJS-CFG-SEC-001" in _ids(sc_none.scan(cfg))
+
+
+def test_config_scanner_runs_applicable_gt_rule_for_ojs33(ruleset, tmp_path):
+    """OJS-CFG-SEC-001 runs on OJS 3.3 and is stamped applicable: true."""
+    cfg = _force_ssl_off_config(tmp_path)
+    sc33 = ConfigScanner(ruleset, ojs_path=tmp_path, ojs_version="3.3.0-13")
+    by = _by_id(sc33.scan(cfg))
+    assert "OJS-CFG-SEC-001" in by
+    finding = by["OJS-CFG-SEC-001"]
+    assert finding.applicable is True
+    assert "3.3.0-13 matches" in (finding.applicability_reason or "")
+
+
+def test_config_scanner_skips_35_only_rule_for_ojs34(ruleset, tmp_path):
+    """OJS-CFG-SEC-013 (app_key, OJS 3.5 only) is skipped on 3.4 but runs on 3.5."""
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n[general]\nbase_url = https://x\n")
+
+    sc34 = ConfigScanner(ruleset, ojs_path=tmp_path, ojs_version="3.4.0-7")
+    assert "OJS-CFG-SEC-013" not in _ids(sc34.scan(cfg))
+
+    sc35 = ConfigScanner(ruleset, ojs_path=tmp_path, ojs_version="3.5.0-1")
+    by35 = _by_id(sc35.scan(cfg))
+    assert "OJS-CFG-SEC-013" in by35
+    assert by35["OJS-CFG-SEC-013"].applicable is True
+
+
+def test_config_scanner_extension_rule_still_runs_but_marked_not_applicable(ruleset, tmp_path):
+    """Nginx/EXT rules remain operational but are flagged applicable: false."""
+    cfg = tmp_path / "c.inc.php"
+    cfg.write_text(";<?php exit; ?>\n[general]\ndisable_path_info = Off\n")
+    sc24 = ConfigScanner(ruleset, ojs_path=tmp_path, ojs_version="2.4.7-1")
+    by = _by_id(sc24.scan(cfg))
+    assert "OJS-CFG-EXT-PATH-INFO" in by  # extension rule still emitted on OJS 2.4
+    assert by["OJS-CFG-EXT-PATH-INFO"].applicable is False

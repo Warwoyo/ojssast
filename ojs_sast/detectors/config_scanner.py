@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ..helpers.rule_applicability import is_rule_applicable_to_version
 from ..helpers.snippet_utils import build_code_snippet, build_missing_evidence_snippet
 from ..models import Finding, Rule, Severity, resolve_rule_metadata
 from ..ruleset.loader import Ruleset
@@ -151,6 +152,19 @@ class ConfigScanner:
             for rule in config_rules:
                 if rule.params.get("reporting") is False:
                     continue
+
+                # Skip ground-truth config rules that do not apply to this OJS
+                # version (version-aware filtering). Extension/generic rules
+                # (ground_truth: false) keep running so Nginx/EXT scans stay
+                # operational; they are simply marked applicable: false.
+                applicable, reason = is_rule_applicable_to_version(rule, self.ojs_version)
+                if not applicable and rule.params.get("ground_truth") is not False:
+                    logger.debug(
+                        "Config rule %s skipped for OJS %s: %s",
+                        rule.id, self.ojs_version, reason,
+                    )
+                    continue
+
                 check = rule.params.get("check")
                 if check and not check.startswith("nginx_"):
                     f = self._run_check(rule, check, text, sections, rel)
@@ -187,6 +201,7 @@ class ConfigScanner:
     def _finding(self, rule: Rule, file_path: str, detail: str,
                  severity: Optional[Severity] = None, **kw) -> Finding:
         extra = dict(kw.pop("extra", {}))
+        applicable, reason = is_rule_applicable_to_version(rule, self.ojs_version)
         return Finding(
             rule_id=rule.id,
             module="config",
@@ -200,6 +215,8 @@ class ConfigScanner:
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
             **resolve_rule_metadata(rule.id, rule.params),
+            applicable=applicable,
+            applicability_reason=reason,
             confidence="high",
             extra=extra,
             **kw,

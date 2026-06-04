@@ -182,6 +182,9 @@ class _BaseDetector:
         source_text: str = "",
     ) -> Finding:
         code_snip = build_code_snippet(source_text, line) if source_text else snippet
+        # A CVE finding is only emitted once the affected-version check passes, so
+        # it is by definition applicable to the scanned version. The branch-aware
+        # reasoning is carried in ``affected_version_reasoning`` as well.
         return Finding(
             rule_id=rule.id,
             module="source_code",
@@ -196,6 +199,8 @@ class _BaseDetector:
             cvss_score=rule.cvss_score,
             cve_references=list(rule.cve_references),
             **resolve_rule_metadata(rule.id, rule.params),
+            applicable=True,
+            applicability_reason=f"applicable: {version_reasoning}",
             code_snippet=code_snip,
             confidence=confidence,
             matched_source=matched_source,

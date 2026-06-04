@@ -180,6 +180,11 @@ class Finding:
     evaluation_scope: Optional[str] = None
     rule_origin: Optional[str] = None
     rule_family: Optional[str] = None
+    # Version-aware applicability (set by detectors that know the OJS version).
+    # ``applicable`` answers: does this rule apply to the scanned OJS version?
+    # It is independent of ``ground_truth`` (dataset membership).
+    applicable: Optional[bool] = None
+    applicability_reason: Optional[str] = None
 
     # Module-specific fields (kept optional so the schema stays uniform).
     layer: Optional[str] = None  # upload module layer
@@ -267,6 +272,8 @@ class Finding:
             "evaluation_scope": evaluation_scope,
             "rule_origin": rule_origin,
             "rule_family": rule_family,
+            "applicable": self.applicable,
+            "applicability_reason": self.applicability_reason,
             "layer": self.layer,
             "actual_mime": self.actual_mime,
             "declared_extension": self.declared_extension,
