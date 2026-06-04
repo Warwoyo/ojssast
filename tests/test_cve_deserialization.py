@@ -213,3 +213,69 @@ class PKPStatisticsHelper {
 """
     ids = _scan(ruleset, source, "classes/statistics/PKPStatisticsHelper.inc.php")
     assert "CVE-SRC-011" in ids, "json_decode in safeMethod should NOT suppress finding in generateReport"
+
+
+# --------------------------------------------------------------------------- #
+# CVE-SRC-011: OJS 2.x paths and alternative function names
+# --------------------------------------------------------------------------- #
+
+VULN_PHP_EXECUTE = """\
+<?php
+class PKPToolsHandler extends Handler {
+    function execute($args, $request) {
+        $filters = $request->getUserVar('filters');
+        $filters = unserialize($filters);
+        $orderBy = $request->getUserVar('orderBy');
+        $data = unserialize(base64_decode($orderBy));
+    }
+}
+"""
+
+
+def test_cve_src_011_detects_execute_function_name(ruleset):
+    """execute() is a valid function_names variant for CVE-SRC-011."""
+    ids = _scan(ruleset, VULN_PHP_EXECUTE, "pages/management/PKPToolsHandler.inc.php")
+    assert "CVE-SRC-011" in ids, f"execute() variant not detected: {ids}"
+
+
+def test_cve_src_011_detects_ojs2_manager_path(ruleset):
+    """pages/manager/ is the OJS 2.x path for PKPToolsHandler."""
+    ids = _scan(ruleset, VULN_PHP_EXECUTE, "pages/manager/PKPToolsHandler.inc.php")
+    assert "CVE-SRC-011" in ids, f"OJS 2.x manager path not detected: {ids}"
+
+
+def test_cve_src_011_detects_lib_pkp_manager_path(ruleset):
+    """lib/pkp/pages/manager/ path variant must also be detected."""
+    ids = _scan(ruleset, VULN_PHP_EXECUTE, "lib/pkp/pages/manager/PKPToolsHandler.inc.php")
+    assert "CVE-SRC-011" in ids, f"lib/pkp/pages/manager path not detected: {ids}"
+
+
+def test_cve_src_011_manager_fixture_file_detected(ruleset):
+    """Scan the OJS 2.x pages/manager fixture file and expect CVE-SRC-011."""
+    scanner = CVEScanner(ruleset)
+    fixture_dir = Path(__file__).parent / "fixtures" / "ojs_cve_p1"
+    php_path = fixture_dir / "pages" / "manager" / "PKPToolsHandler.inc.php"
+    rel = "pages/manager/PKPToolsHandler.inc.php"
+    text = php_path.read_text(encoding="utf-8")
+    findings = scanner.scan_file(php_path, rel, text.encode(), text)
+    rule_ids = {f.rule_id for f in findings}
+    assert "CVE-SRC-011" in rule_ids, f"Expected CVE-SRC-011 from manager fixture, got: {rule_ids}"
+
+
+def test_cve_src_011_execute_safe_patch_scoped(ruleset):
+    """json_decode in a sibling function must NOT suppress unserialize in execute()."""
+    source = """\
+<?php
+class PKPToolsHandler extends Handler {
+    function execute($args, $request) {
+        $filters = $request->getUserVar('filters');
+        $filters = unserialize($filters);
+    }
+
+    function fetchReport($request) {
+        $data = json_decode($request->getUserVar('data'), true);
+    }
+}
+"""
+    ids = _scan(ruleset, source, "pages/manager/PKPToolsHandler.inc.php")
+    assert "CVE-SRC-011" in ids, "json_decode in fetchReport must NOT suppress finding in execute()"
