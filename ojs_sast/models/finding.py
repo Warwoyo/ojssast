@@ -75,6 +75,8 @@ class Finding:
     evaluation_scope: Optional[str] = None
     rule_origin: Optional[str] = None
     rule_family: Optional[str] = None
+    applicable: Optional[bool] = None
+    applicability_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         metadata = resolve_rule_metadata(self.rule_id)
@@ -109,6 +111,8 @@ class Finding:
             "evaluation_scope": evaluation_scope,
             "rule_origin": rule_origin,
             "rule_family": rule_family,
+            "applicable": self.applicable,
+            "applicability_reason": self.applicability_reason,
             "confidence": self.confidence,
             "taint_path": self.taint_path.to_dict() if self.taint_path else None,
         }

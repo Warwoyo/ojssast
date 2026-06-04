@@ -160,3 +160,39 @@ def test_cve_rules_are_ground_truth(ruleset):
         assert rule.params.get("ground_truth") is not False, (
             f"CVE rule {rid} must remain in the ground-truth ruleset"
         )
+
+
+def test_ground_truth_config_rules_declare_affected_versions(ruleset):
+    """Every ground-truth config rule must declare explicit affected_versions.
+
+    affected_versions controls version applicability (not rule loading); a missing
+    value would make version-aware evaluation impossible, so this must fail loudly.
+    """
+    missing = []
+    for rid in CONFIG_GT_IDS:
+        rule = ruleset.get(rid)
+        assert rule is not None, f"Rule {rid} is missing from the ruleset"
+        if not rule.params.get("affected_versions"):
+            missing.append(rid)
+    assert not missing, f"Ground-truth config rules missing affected_versions: {missing}"
+
+
+def test_ground_truth_cve_rules_declare_affected_versions(ruleset):
+    missing = [
+        rid for rid in CVE_GT_IDS
+        if not (ruleset.get(rid) and ruleset.get(rid).params.get("affected_versions"))
+    ]
+    assert not missing, f"CVE ground-truth rules missing affected_versions: {missing}"
+
+
+def test_extension_config_rules_excluded_from_strict_gt_applicability(ruleset):
+    """Nginx/EXT rules stay non-ground-truth and are not strict-GT applicable."""
+    from ojs_sast.helpers.rule_applicability import is_rule_applicable_to_version
+
+    for rid, rule in ((r.id, r) for r in ruleset.by_module("config")):
+        if rid.startswith(EXTENSION_CONFIG_PREFIXES):
+            assert rule.params.get("ground_truth") is False
+            applicable, _ = is_rule_applicable_to_version(rule, "3.5.0-1")
+            assert applicable is False, (
+                f"Extension rule {rid} must not be strict-GT applicable"
+            )

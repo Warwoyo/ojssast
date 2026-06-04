@@ -53,6 +53,8 @@ def _to_finding(internal: "InternalFinding") -> Finding:
         evaluation_scope=internal.evaluation_scope,
         rule_origin=internal.rule_origin,
         rule_family=internal.rule_family,
+        applicable=internal.applicable,
+        applicability_reason=internal.applicability_reason,
     )
 
 
