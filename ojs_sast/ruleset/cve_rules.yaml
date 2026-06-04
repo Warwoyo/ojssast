@@ -406,10 +406,18 @@ rules:
         - "pages/management/PKPToolsHandler.inc.php"
         - "pages/management/PKPToolsHandler.php"
         - "lib/pkp/pages/management/PKPToolsHandler.inc.php"
+        - "pages/manager/PKPToolsHandler.inc.php"
+        - "pages/manager/PKPToolsHandler.php"
+        - "lib/pkp/pages/manager/PKPToolsHandler.inc.php"
         - "classes/statistics/PKPStatisticsHelper.inc.php"
         - "classes/statistics/PKPStatisticsHelper.php"
         - "lib/pkp/classes/statistics/PKPStatisticsHelper.inc.php"
-      function_name: generateReport
+      function_names:
+        - "generateReport"
+        - "execute"
+        - "readInputData"
+        - "fetch"
+        - "getReport"
       source_patterns:
         - "getUserVar\\s*\\(\\s*['\"]filters['\"]"
         - "getUserVar\\s*\\(\\s*['\"]orderBy['\"]"
@@ -443,12 +451,16 @@ rules:
       patched_versions: ["3.1.1-2"]
       file_path_patterns:
         - "templates/frontend/pages/search.tpl"
+        - "templates/search/search.tpl"
+        - "templates/search/advancedSearch.tpl"
+        - "lib/pkp/templates/frontend/pages/search.tpl"
+        - "lib/pkp/templates/search/search.tpl"
       source_patterns:
         - "\\$authors"
       sink_patterns:
         - "value\\s*=\\s*[\"']?\\s*\\{\\s*\\$authors\\b(?![^}]*\\|\\s*escape)[^}]*\\}"
         - "\\{\\$authors\\b(?!\\s*\\|\\s*escape)[^}]*\\}"
-      safe_patch_patterns:
-        - "\\$authors\\s*\\|\\s*escape"
+      safe_patch_patterns: []
       confidence_reason: >-
         {$authors} in search.tpl value attribute without |escape modifier.
+        Sink pattern uses inline negative lookahead to avoid file-level false suppression.

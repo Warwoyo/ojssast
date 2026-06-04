@@ -391,9 +391,64 @@ class _SmartyXSSDetector(_BaseDetector):
 
     Uses DOTALL multiline matching so Smarty tags and HTML attributes that span
     multiple lines are correctly detected.
+
+    CVE-SRC-007 and CVE-SRC-012 use per-candidate escape checking via inline
+    negative lookahead — no file-level safe_patch check, which would suppress
+    findings when an escaped expression appears elsewhere in the same file.
     """
 
     def evaluate(self, rule, rel, source, ojs_version):
+        if rule.id in ("CVE-SRC-007", "CVE-SRC-012"):
+            return self._evaluate_no_file_safe_patch(rule, rel, source, ojs_version)
+        return self._evaluate_generic_smarty_xss(rule, rel, source, ojs_version)
+
+    def _evaluate_no_file_safe_patch(self, rule, rel, source, ojs_version):
+        """Evaluate without file-level safe_patch; sink patterns carry inline negative lookahead."""
+        params = rule.params
+        affected, version_reason = is_version_affected(
+            ojs_version,
+            params.get("affected_versions"),
+            params.get("patched_versions"),
+        )
+        if not affected:
+            logger.debug("CVE %s: version %s not in affected range", rule.id, ojs_version)
+            return None
+
+        sink_patterns = params.get("sink_patterns", [])
+        source_patterns = params.get("source_patterns", [])
+
+        for pat in sink_patterns:
+            hit = find_pattern_span(source, pat, re.IGNORECASE | re.DOTALL | re.MULTILINE)
+            if hit:
+                logger.debug(
+                    "CVE %s: sink pattern matched at line %d (snippet: %r)",
+                    rule.id, hit.line_start, (hit.snippet or "")[:80],
+                )
+                src_pat = source_patterns[0] if source_patterns else pat
+                confidence = "high" if ojs_version else "medium"
+                conf_reason = params.get("confidence_reason", "")
+                if not ojs_version:
+                    conf_reason += " (version unknown — confidence reduced)"
+                return self._make_finding(
+                    rule=rule,
+                    rel=rel,
+                    line=hit.line_start,
+                    snippet=hit.snippet or "",
+                    matched_source=src_pat,
+                    matched_sink=pat,
+                    missing_patch_evidence="Inline negative lookahead applied — no file-level safe-patch",
+                    safe_patch_checked=[],
+                    version_reasoning=version_reason,
+                    confidence=confidence,
+                    confidence_reason=conf_reason,
+                    source_text=source,
+                )
+
+        logger.debug("CVE %s: no sink pattern matched in %s", rule.id, rel)
+        return None
+
+    def _evaluate_generic_smarty_xss(self, rule, rel, source, ojs_version):
+        """Standard Smarty XSS evaluation with file-level safe_patch check."""
         params = rule.params
 
         # 1) Version check.
@@ -496,31 +551,41 @@ class _DeserializationDetector(_BaseDetector):
             return None
 
         # 2) Determine analysis scope: function → class → full file.
+        #    Support both single function_name and a function_names list.
         fn_name = params.get("function_name")
+        fn_names: List[str] = list(params.get("function_names", []))
+        if fn_name and fn_name not in fn_names:
+            fn_names.insert(0, fn_name)
+
         class_name = params.get("class_name")
         scope: Optional[str] = None
         scope_label = "full file"
 
-        if fn_name:
-            scope = extract_function_body(source, fn_name)
-            if scope:
-                scope_label = f"function {fn_name}"
-                logger.debug("CVE %s: using function scope '%s'", rule.id, fn_name)
-            else:
+        for name in fn_names:
+            s = extract_function_body(source, name)
+            if s:
+                scope = s
+                scope_label = f"function {name}"
+                logger.debug("CVE %s: using function scope '%s'", rule.id, name)
+                break
+
+        if not scope:
+            if fn_names:
                 logger.debug(
-                    "CVE %s: function '%s' not found, trying class scope", rule.id, fn_name
+                    "CVE %s: none of %s found, trying class/full-file scope",
+                    rule.id, fn_names,
                 )
-                if class_name:
-                    scope = extract_class_body(source, class_name)
-                    if scope:
-                        scope_label = f"class {class_name}"
-                    else:
-                        logger.debug(
-                            "CVE %s: class '%s' not found, falling back to full file",
-                            rule.id, class_name,
-                        )
+            if class_name:
+                scope = extract_class_body(source, class_name)
+                if scope:
+                    scope_label = f"class {class_name}"
                 else:
-                    logger.debug("CVE %s: no class_name, falling back to full file", rule.id)
+                    logger.debug(
+                        "CVE %s: class '%s' not found, falling back to full file",
+                        rule.id, class_name,
+                    )
+            else:
+                logger.debug("CVE %s: no function/class scope, using full file", rule.id)
 
         check_text = scope if scope else source
 

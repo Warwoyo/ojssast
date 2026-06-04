@@ -171,3 +171,22 @@ def test_p1_cve_regression_detects_all_three_missing_cves(ruleset, tmp_path):
 
     missing = {"CVE-SRC-007", "CVE-SRC-011", "CVE-SRC-012"} - detected
     assert not missing, f"Still missing CVEs: {missing} (detected: {detected})"
+
+
+def test_p1_cve_regression_detects_ojs2_paths(ruleset, tmp_path):
+    """OJS 2.x path variants (pages/manager/, templates/search/) must also fire."""
+    root = tmp_path
+    _make_ojs_tree(root)
+    ojs = root / "ojs"
+
+    scanner = CVEScanner(ruleset)
+    detected = set()
+
+    for inc_file in ojs.rglob("*.inc.php"):
+        detected |= _scan_file(scanner, inc_file, ojs)
+    for tpl_file in ojs.rglob("*.tpl"):
+        detected |= _scan_file(scanner, tpl_file, ojs)
+
+    # The fixture tree includes pages/manager/ and templates/search/ variants.
+    missing = {"CVE-SRC-011", "CVE-SRC-012"} - detected
+    assert not missing, f"OJS 2.x path variants missing: {missing} (detected: {detected})"

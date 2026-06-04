@@ -251,3 +251,74 @@ def test_cve_src_012_ignores_escaped_html_modifier(ruleset):
     findings = scanner.scan_file(Path(rel), rel, safe_tpl.encode(), safe_tpl)
     rule_ids = {f.rule_id for f in findings}
     assert "CVE-SRC-012" not in rule_ids
+
+
+# --------------------------------------------------------------------------- #
+# CVE-SRC-012: realistic mixed-content (other fields escaped, authors not)
+# --------------------------------------------------------------------------- #
+
+REALISTIC_FIXTURES = Path(__file__).parent / "fixtures" / "ojs_cve_p1_realistic"
+
+
+def test_cve_src_012_not_suppressed_when_other_fields_escaped(ruleset):
+    """File-level $authors|escape in display context must NOT suppress value attribute finding."""
+    scanner = CVEScanner(ruleset)
+    tpl = """\
+{if $authors}
+    <p>{$authors|escape}</p>
+{/if}
+<form>
+    <input type="text" name="authors" value="{$authors}">
+</form>
+"""
+    rel = "templates/frontend/pages/search.tpl"
+    findings = scanner.scan_file(Path(rel), rel, tpl.encode(), tpl)
+    rule_ids = {f.rule_id for f in findings}
+    assert "CVE-SRC-012" in rule_ids, (
+        "Should detect even when $authors|escape appears in a display context"
+    )
+
+
+def test_cve_src_012_realistic_fixture_detected(ruleset):
+    """Realistic fixture with mixed safe/unsafe $authors must trigger CVE-SRC-012."""
+    scanner = CVEScanner(ruleset)
+    tpl_path = REALISTIC_FIXTURES / "templates" / "frontend" / "pages" / "search.tpl"
+    rel = "templates/frontend/pages/search.tpl"
+    text = tpl_path.read_text(encoding="utf-8")
+    findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
+    rule_ids = {f.rule_id for f in findings}
+    assert "CVE-SRC-012" in rule_ids, (
+        f"Expected CVE-SRC-012 from realistic fixture with mixed safe/unsafe authors, got: {rule_ids}"
+    )
+
+
+def test_cve_src_012_suppressed_when_authors_value_escaped(ruleset):
+    """CVE-SRC-012 must NOT fire when the value attribute itself uses |escape."""
+    scanner = CVEScanner(ruleset)
+    tpl = """\
+{if $authors}
+    <p>{$authors|escape}</p>
+{/if}
+<form>
+    <input type="text" name="authors" value="{$authors|escape}">
+</form>
+"""
+    rel = "templates/frontend/pages/search.tpl"
+    findings = scanner.scan_file(Path(rel), rel, tpl.encode(), tpl)
+    rule_ids = {f.rule_id for f in findings}
+    assert "CVE-SRC-012" not in rule_ids, "Should NOT detect when value attribute uses |escape"
+
+
+# --------------------------------------------------------------------------- #
+# CVE-SRC-012: OJS 2.x template path
+# --------------------------------------------------------------------------- #
+
+def test_cve_src_012_detects_ojs2_template_path(ruleset):
+    """CVE-SRC-012 must detect on OJS 2.x path templates/search/search.tpl."""
+    scanner = CVEScanner(ruleset)
+    tpl_path = FIXTURES / "templates" / "search" / "search.tpl"
+    rel = "templates/search/search.tpl"
+    text = tpl_path.read_text(encoding="utf-8")
+    findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
+    rule_ids = {f.rule_id for f in findings}
+    assert "CVE-SRC-012" in rule_ids, f"Expected CVE-SRC-012 for OJS 2.x path, got: {rule_ids}"
