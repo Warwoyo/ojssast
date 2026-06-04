@@ -107,6 +107,20 @@ def _ignored_patched_specs_reason(ignored_specs: List[str]) -> str:
     return f"; ignored patched specs from other branches: {', '.join(ignored_specs)}"
 
 
+def version_matches_spec(detected: str, spec: str) -> bool:
+    """Return True if ``detected`` satisfies a single version ``spec`` bound.
+
+    Supports the same operators as :func:`is_version_affected`
+    (``>=``, ``>``, ``<=``, ``<``, ``==``, ``=`` and a bare prefix).
+    """
+    det = parse_version(detected)
+    return _matches_affected_spec(detected, det, spec) is not None
+
+
+def _is_lower_bound(spec: str) -> bool:
+    return spec.strip().startswith((">=", ">"))
+
+
 def is_version_affected(
     detected: Optional[str],
     affected_specs: Optional[List[str]],
@@ -128,11 +142,31 @@ def is_version_affected(
 
     affected_match_reasons: List[str] = []
     if affected_specs:
-        for spec in affected_specs:
-            match_reason = _matches_affected_spec(detected, det, spec)
-            if match_reason:
-                affected_match_reasons.append(match_reason)
-        matches_affected = bool(affected_match_reasons)
+        # Lower bounds (``>=`` / ``>``) are AND-required: they define the floor of
+        # a contiguous affected range (e.g. ``[">=3.3.0", "<3.6.0"]`` reads as
+        # ``>=3.3.0`` *and* ``<3.6.0``). Upper/exact/prefix bounds keep OR
+        # semantics so a list of per-branch ceilings
+        # (``["<=3.3.0-21", "<=3.4.0-9"]``) still matches any affected branch.
+        # Rules without a lower bound behave exactly as before (backward compatible).
+        lower_specs = [s for s in affected_specs if _is_lower_bound(s)]
+        other_specs = [s for s in affected_specs if not _is_lower_bound(s)]
+
+        lower_ok = all(
+            _matches_affected_spec(detected, det, spec) is not None for spec in lower_specs
+        )
+        if other_specs:
+            for spec in other_specs:
+                match_reason = _matches_affected_spec(detected, det, spec)
+                if match_reason:
+                    affected_match_reasons.append(match_reason)
+            other_ok = bool(affected_match_reasons)
+        else:
+            other_ok = True
+            affected_match_reasons.append("no upper-bound constraints")
+
+        if lower_specs:
+            affected_match_reasons.append(f"satisfies floor {', '.join(lower_specs)}")
+        matches_affected = lower_ok and other_ok
     else:
         matches_affected = True
         affected_match_reasons.append("no affected-version constraints defined")

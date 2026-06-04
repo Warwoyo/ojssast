@@ -53,6 +53,14 @@ def _to_finding(internal: "InternalFinding") -> Finding:
         evaluation_scope=internal.evaluation_scope,
         rule_origin=internal.rule_origin,
         rule_family=internal.rule_family,
+        applicable=internal.applicable,
+        applicability_reason=internal.applicability_reason,
+        matched_source=internal.matched_source,
+        matched_sink=internal.matched_sink,
+        missing_patch_evidence=internal.missing_patch_evidence,
+        safe_patch_checked=internal.safe_patch_checked,
+        affected_version_reasoning=internal.affected_version_reasoning,
+        confidence_reason=internal.confidence_reason,
     )
 
 

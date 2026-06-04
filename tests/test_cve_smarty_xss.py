@@ -176,7 +176,7 @@ def test_cve_src_007_detects_multiline_translate_unescaped(ruleset):
     text = tpl_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-007" in rule_ids, f"Expected CVE-SRC-007, got: {rule_ids}"
+    assert "CVE-SRC-5903" in rule_ids, f"Expected CVE-SRC-007, got: {rule_ids}"
 
 
 def test_cve_src_007_ignores_escaped_get_localized_title(ruleset):
@@ -190,7 +190,7 @@ def test_cve_src_007_ignores_escaped_get_localized_title(ruleset):
     rel = "templates/frontend/pages/submissions.tpl"
     findings = scanner.scan_file(Path(rel), rel, safe_tpl.encode(), safe_tpl)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-007" not in rule_ids
+    assert "CVE-SRC-5903" not in rule_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -221,7 +221,7 @@ def test_cve_src_012_detects_multiline_authors_value_unescaped(ruleset):
     text = tpl_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" in rule_ids, f"Expected CVE-SRC-012, got: {rule_ids}"
+    assert "CVE-SRC-12229" in rule_ids, f"Expected CVE-SRC-012, got: {rule_ids}"
 
 
 def test_cve_src_012_ignores_escaped_authors_value(ruleset):
@@ -234,7 +234,7 @@ def test_cve_src_012_ignores_escaped_authors_value(ruleset):
     rel = "templates/frontend/pages/search.tpl"
     findings = scanner.scan_file(Path(rel), rel, safe_tpl.encode(), safe_tpl)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" not in rule_ids
+    assert "CVE-SRC-12229" not in rule_ids
 
 
 def test_cve_src_012_ignores_escaped_html_modifier(ruleset):
@@ -250,7 +250,7 @@ def test_cve_src_012_ignores_escaped_html_modifier(ruleset):
     rel = "templates/frontend/pages/search.tpl"
     findings = scanner.scan_file(Path(rel), rel, safe_tpl.encode(), safe_tpl)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" not in rule_ids
+    assert "CVE-SRC-12229" not in rule_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -274,7 +274,7 @@ def test_cve_src_012_not_suppressed_when_other_fields_escaped(ruleset):
     rel = "templates/frontend/pages/search.tpl"
     findings = scanner.scan_file(Path(rel), rel, tpl.encode(), tpl)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" in rule_ids, (
+    assert "CVE-SRC-12229" in rule_ids, (
         "Should detect even when $authors|escape appears in a display context"
     )
 
@@ -287,7 +287,7 @@ def test_cve_src_012_realistic_fixture_detected(ruleset):
     text = tpl_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" in rule_ids, (
+    assert "CVE-SRC-12229" in rule_ids, (
         f"Expected CVE-SRC-012 from realistic fixture with mixed safe/unsafe authors, got: {rule_ids}"
     )
 
@@ -306,19 +306,21 @@ def test_cve_src_012_suppressed_when_authors_value_escaped(ruleset):
     rel = "templates/frontend/pages/search.tpl"
     findings = scanner.scan_file(Path(rel), rel, tpl.encode(), tpl)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" not in rule_ids, "Should NOT detect when value attribute uses |escape"
+    assert "CVE-SRC-12229" not in rule_ids, "Should NOT detect when value attribute uses |escape"
 
 
 # --------------------------------------------------------------------------- #
-# CVE-SRC-012: OJS 2.x template path
+# CVE-SRC-12229: OJS 2.x template path (templates/search/search.tpl)
 # --------------------------------------------------------------------------- #
 
-def test_cve_src_012_detects_ojs2_template_path(ruleset):
-    """CVE-SRC-012 must detect on OJS 2.x path templates/search/search.tpl."""
+def test_cve_src_12229_detects_ojs2_template_path(ruleset):
+    """CVE-SRC-12229 must detect on the OJS 2.x path templates/search/search.tpl."""
     scanner = CVEScanner(ruleset)
     tpl_path = FIXTURES / "templates" / "search" / "search.tpl"
     rel = "templates/search/search.tpl"
     text = tpl_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(tpl_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-012" in rule_ids, f"Expected CVE-SRC-012 for OJS 2.x path, got: {rule_ids}"
+    assert "CVE-SRC-12229" in rule_ids, f"Expected CVE-SRC-12229 for OJS 2.x path, got: {rule_ids}"
+
+

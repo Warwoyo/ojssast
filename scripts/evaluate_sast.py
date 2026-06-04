@@ -278,6 +278,134 @@ def calculate_metrics(expected: set[str], predicted: set[str], scope: str) -> di
     }
 
 
+def _scan_ojs_version(scan_result: Any) -> str | None:
+    """Extract the scanned OJS version from a JSON scan result.
+
+    Supports both the reporter shape (top-level ``ojs_version``) and the internal
+    ``scan_metadata.ojs_version`` shape.
+    """
+    if isinstance(scan_result, dict):
+        version = scan_result.get("ojs_version")
+        if version:
+            return None if str(version).lower() == "unknown" else str(version)
+        meta = scan_result.get("scan_metadata")
+        if isinstance(meta, dict):
+            version = meta.get("ojs_version")
+            if version:
+                return None if str(version).lower() == "unknown" else str(version)
+    return None
+
+
+def _load_rules_index(ruleset_dir: Path | None) -> dict[str, Any]:
+    """Load the ruleset and return ``{rule_id: Rule}`` (empty if unavailable)."""
+    try:
+        from ojs_sast.ruleset.loader import load_ruleset
+    except Exception:  # pragma: no cover - ruleset deps unavailable
+        return {}
+    try:
+        ruleset = load_ruleset(Path(ruleset_dir) if ruleset_dir else None)
+    except Exception:  # pragma: no cover - defensive
+        return {}
+    return {rule.id: rule for rule in ruleset}
+
+
+def _applicable_expected(expected: set[str], rules_index: dict[str, Any], version: str | None) -> set[str]:
+    """Subset of ``expected`` ground-truth rules applicable to ``version``."""
+    from ojs_sast.helpers.rule_applicability import is_rule_applicable_to_version
+
+    applicable: set[str] = set()
+    for rule_id in expected:
+        rule = rules_index.get(rule_id)
+        if rule is None:
+            # GT id not present in the ruleset — keep it conservatively so the
+            # denominator is never silently reduced.
+            applicable.add(rule_id)
+            continue
+        ok, _ = is_rule_applicable_to_version(rule, version)
+        if ok:
+            applicable.add(rule_id)
+    return applicable
+
+
+def _version_aware_metrics(
+    version: str | None,
+    expected: set[str],
+    applicable: set[str],
+    predicted: set[str],
+) -> dict[str, Any]:
+    """Compute version-aware strict-GT metrics for a single scan.
+
+    * ``tp``            — predicted GT rules that ARE applicable to the version.
+    * ``version_fp``    — predicted GT rules NOT applicable to the version
+                          (counted separately, never as TP).
+    * ``fp``            — predicted strict rules that are not ground truth at all.
+    * ``fn``            — applicable GT rules that were not predicted.
+    """
+    tp_rules = predicted & applicable
+    version_fp_rules = (predicted & expected) - applicable
+    fp_rules = predicted - expected
+    fn_rules = applicable - predicted
+
+    tp, fp, version_fp, fn = len(tp_rules), len(fp_rules), len(version_fp_rules), len(fn_rules)
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    version_adjusted_precision = (
+        tp / (tp + fp + version_fp) if (tp + fp + version_fp) else 0.0
+    )
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    return {
+        "scope": "strict-gt-version-aware",
+        "ojs_version": version or "unknown",
+        "expected_applicable_gt": len(applicable),
+        "predicted_applicable_gt": tp,
+        "tp": tp,
+        "fp": fp,
+        "version_fp": version_fp,
+        "fn": fn,
+        "precision": precision,
+        "strict_precision": precision,
+        "version_adjusted_precision": version_adjusted_precision,
+        "recall": recall,
+        "f1": f1,
+        "false_positives": sorted(fp_rules),
+        "version_false_positives": sorted(version_fp_rules),
+        "false_negatives": sorted(fn_rules),
+    }
+
+
+def evaluate_version_aware(
+    scan_result_paths: list[Path],
+    expected: set[str],
+    ruleset_dir: Path | None,
+) -> dict[str, Any]:
+    """Per-scan, version-aware strict-GT evaluation.
+
+    Each scan file is evaluated against its own applicable-GT denominator, derived
+    from the scan's ``ojs_version`` and each rule's ``affected_versions``.
+    """
+    rules_index = _load_rules_index(ruleset_dir)
+    per_version: list[dict[str, Any]] = []
+    for path in scan_result_paths:
+        scan = load_json(path)
+        version = _scan_ojs_version(scan)
+        findings = extract_findings(scan)
+        predicted = {
+            _rule_id(f) for f in findings if is_strict_gt_finding(f) and _rule_id(f)
+        }
+        applicable = _applicable_expected(expected, rules_index, version)
+        result = _version_aware_metrics(version, expected, applicable, predicted)
+        result["source"] = str(path)
+        result["total_gt"] = len(expected)
+        per_version.append(result)
+
+    return {
+        "scope": "strict-gt-version-aware",
+        "total_gt": len(expected),
+        "per_version": per_version,
+    }
+
+
 def evaluate_scan_results(
     scan_result_paths: list[Path],
     ground_truth_config_path: Path,
@@ -289,6 +417,9 @@ def evaluate_scan_results(
     gt_config = load_json(ground_truth_config_path)
     gt_cve = load_json(ground_truth_cve_path)
     expected = build_expected_rule_ids(gt_config, gt_cve, ruleset_dir, exclude_informational_gt)
+
+    if scope == "strict-gt-version-aware":
+        return evaluate_version_aware(scan_result_paths, expected, ruleset_dir)
 
     findings: list[dict[str, Any]] = []
     for path in scan_result_paths:
@@ -313,9 +444,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ruleset-dir", type=Path, default=None, help="Optional ruleset directory")
     parser.add_argument(
         "--scope",
-        choices=("strict-gt", "all-reported", "extension-aware"),
+        choices=("strict-gt", "all-reported", "extension-aware", "strict-gt-version-aware"),
         default="strict-gt",
-        help="Evaluation scope (default: strict-gt)",
+        help=(
+            "Evaluation scope (default: strict-gt). 'strict-gt-version-aware' is the "
+            "primary mode for final reports: it builds a per-scan denominator from each "
+            "scan's ojs_version and every ground-truth rule's affected_versions, and "
+            "reports version_fp for ground-truth findings that do not apply to the "
+            "scanned version."
+        ),
     )
     parser.add_argument(
         "--exclude-informational-gt",

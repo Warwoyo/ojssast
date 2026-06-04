@@ -18,6 +18,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: installed
@@ -37,6 +42,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: base_url_scheme
       section: general
       key: base_url
@@ -60,6 +70,11 @@ rules:
     pattern_type: builtin
     cve_references: ["CVE-2022-24181"]
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.1.2"
+        - "<3.6.0"
       check: allowed_hosts
       section: general
       key: allowed_hosts
@@ -80,6 +95,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: trust_x_forwarded_for
@@ -101,6 +121,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: allow_url_fopen
@@ -120,6 +145,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: general
       key: session_lifetime
@@ -140,6 +170,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.4.0"
+        - "<3.6.0"
       check: enum_directive
       section: general
       key: session_samesite
@@ -160,6 +195,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: sandbox
@@ -177,6 +217,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: informational_directive
       section: general
       key: show_upgrade_warning
@@ -190,6 +235,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: informational_directive
       section: general
       key: enable_beacon
@@ -205,6 +255,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: general
       key: user_validation_period
@@ -226,6 +281,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: force_ssl
@@ -244,6 +304,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: force_login_ssl
@@ -263,6 +328,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: session_check_ip
@@ -282,6 +352,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: encryption
@@ -300,6 +375,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: session_expire_on_close
@@ -318,6 +398,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: value_strength
       section: security
       key: salt
@@ -344,6 +429,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: value_strength
       section: security
       key: api_key_secret
@@ -363,6 +453,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: security
       key: reset_seconds
@@ -383,6 +478,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: allow_plugin_install
@@ -403,6 +503,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: integer_threshold
       section: security
       key: password_timeout
@@ -423,6 +528,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: cipher
@@ -441,6 +551,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: cookie_encryption
@@ -460,6 +575,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: value_strength
       section: general
       key: app_key
@@ -480,6 +600,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: allowed_html_tags
       section: security
       key: allowed_html
@@ -504,6 +629,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: default_db_credentials
       section: database
       # Keep breached_passwords list to satisfy test_breached_password_list_embedded in test_ruleset.py
@@ -575,6 +705,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: database
       key: debug
@@ -594,6 +729,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: db_secure_remote
       section: database
     description: >-
@@ -610,6 +750,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: files_dir_webroot
       section: files
       key: files_dir
@@ -629,6 +774,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: files
       key: umask
@@ -648,6 +798,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: files
       key: public_user_dir_size
@@ -668,6 +823,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: guard_line
       guard_tokens: ["<?php", "exit"]
       scan_lines: 3
@@ -688,6 +848,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: email
       key: smtp_suppress_cert_check
@@ -707,6 +872,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: email
       key: require_validation
@@ -726,6 +896,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.4.0"
+        - "<3.6.0"
       check: captcha_engine
       section: captcha
     description: >-
@@ -744,6 +919,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: show_stacktrace
@@ -763,6 +943,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: display_errors
@@ -782,6 +967,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: deprecation_warnings
@@ -801,6 +991,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: log_web_service_info
