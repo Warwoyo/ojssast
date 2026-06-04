@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..helpers.snippet_utils import build_code_snippet
 from ..helpers.path_utils import matches_cve_path
@@ -39,39 +39,108 @@ from ..ruleset.loader import Ruleset
 
 logger = logging.getLogger("ojs_sast.cve_scanner")
 
+# --------------------------------------------------------------------------- #
+# File-walking configuration (the CVE scanner is now the source_code module).
+# --------------------------------------------------------------------------- #
+PHP_EXTENSIONS = {".php", ".phtml", ".inc", ".php3", ".php4", ".php5"}
+SMARTY_EXTENSIONS = {".tpl", ".smarty"}
+JS_EXTENSIONS = {".js", ".jsx"}
+SCANNED_EXTENSIONS = PHP_EXTENSIONS | SMARTY_EXTENSIONS | JS_EXTENSIONS
+
+DEFAULT_SKIP_DIRS = {
+    ".git", ".svn", ".hg", "node_modules", "vendor", "bower_components",
+    "__pycache__", ".idea", ".vscode",
+}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# A function_name / class_name value meaning "no scope restriction".
+_WILDCARD_SCOPE = {None, "", "*"}
+
 
 # --------------------------------------------------------------------------- #
 # CVE Scanner Engine
 # --------------------------------------------------------------------------- #
 class CVEScanner:
-    """Evaluates CVE-specific rules against scanned source files."""
+    """Evaluates the structured ``cve_rules.yaml`` rules against source files.
+
+    This is the ``source_code`` module scanner: it walks the OJS tree and runs
+    every source-code rule that declares a ``vulnerability_type`` (CVE rules plus
+    the generic structured rules such as ``SAST-SRC-LESS-001``). Each rule is
+    routed to the detector that matches its ``vulnerability_type`` and only emits
+    a finding when path, scope, source, sink, missing-safe-patch and OJS version
+    conditions all hold.
+    """
 
     def __init__(
         self,
         ruleset: Ruleset,
         ojs_version: Optional[str] = None,
+        *,
+        verbose: bool = False,
+        progress_cb: Optional[Callable[[str], None]] = None,
+        skip_dirs: Optional[Sequence[str]] = None,
     ):
         self.ojs_version = ojs_version
-        # Filter to only CVE pattern-type rules.
+        self.verbose = verbose
+        self.progress_cb = progress_cb
+        self.skip_dirs = set(skip_dirs) if skip_dirs else set(DEFAULT_SKIP_DIRS)
+        self.files_scanned = 0
+        # Structured source-code rules driven by cve_rules.yaml. A rule qualifies
+        # when it targets the source_code module and declares a vulnerability_type
+        # (covers both pattern_type: cve and the generic structured regex rules).
         self.cve_rules: List[Rule] = [
-            r for r in ruleset if r.pattern_type == "cve"
+            r for r in ruleset
+            if r.module == "source_code" and r.params.get("vulnerability_type")
         ]
-        # Index rules by vulnerability type for efficient dispatch.
-        self._detectors: Dict[str, _BaseDetector] = {
-            "sqli": _SQLiDetector(),
-            "csrf": _CSRFDetector(),
-            "path_traversal": _PathTraversalDetector(),
-            "code_injection": _CodeInjectionDetector(),
-            "smarty_xss": _SmartyXSSDetector(),
-            "php_xss": _PHPXSSDetector(),
-            "host_header": _HostHeaderDetector(),
-            "deserialization": _DeserializationDetector(),
-        }
+        # Concrete detectors. ``_select_detector`` maps a (possibly descriptive)
+        # vulnerability_type string onto one of these.
+        self._sqli = _SQLiDetector()
+        self._csrf = _CSRFDetector()
+        self._path_traversal = _PathTraversalDetector()
+        self._code_injection = _CodeInjectionDetector()
+        self._smarty_xss = _SmartyXSSDetector()
+        self._php_xss = _PHPXSSDetector()
+        self._host_header = _HostHeaderDetector()
+        self._deserialization = _DeserializationDetector()
+
+    # ------------------------------------------------------------------ #
+    # Detector dispatch
+    # ------------------------------------------------------------------ #
+    def _select_detector(self, vuln_type: str, rel: str) -> Optional["_BaseDetector"]:
+        """Route a ``vulnerability_type`` to a detector.
+
+        The ruleset uses descriptive types (``reflected_xss``,
+        ``path_traversal_arbitrary_file_write_rce``,
+        ``host_header_injection_reflected_xss`` …), so matching is keyword-based.
+        XSS is split between Smarty templates and PHP by file extension.
+        Ordering matters: host-header and deserialization are checked before the
+        generic ``xss`` keyword.
+        """
+        vt = (vuln_type or "").lower()
+        if not vt:
+            return None
+        if "sqli" in vt or "sql_injection" in vt:
+            return self._sqli
+        if "csrf" in vt:
+            return self._csrf
+        if "deserial" in vt:
+            return self._deserialization
+        if "host_header" in vt:
+            return self._host_header
+        if "path_traversal" in vt or "file_write" in vt:
+            return self._path_traversal
+        if "less" in vt or "code_injection" in vt or "code_exec" in vt:
+            return self._code_injection
+        if "xss" in vt:
+            if rel.lower().endswith((".tpl", ".smarty")):
+                return self._smarty_xss
+            return self._php_xss
+        return None
 
     def scan_file(
         self, path: Path, rel: str, raw: bytes, text: Optional[str] = None,
     ) -> List[Finding]:
-        """Evaluate all CVE rules against a single file.
+        """Evaluate all structured source-code rules against a single file.
 
         Only rules whose ``file_path_patterns`` match ``rel`` are evaluated.
         """
@@ -91,7 +160,7 @@ class CVEScanner:
                 continue
 
             vuln_type = params.get("vulnerability_type", "")
-            detector = self._detectors.get(vuln_type)
+            detector = self._select_detector(vuln_type, rel)
             if detector is None:
                 logger.debug("CVE %s: no detector for vulnerability_type '%s'", rule.id, vuln_type)
                 continue
@@ -104,6 +173,50 @@ class CVEScanner:
             else:
                 logger.debug("CVE %s: no finding for '%s'", rule.id, rel)
 
+        return findings
+
+    # ------------------------------------------------------------------ #
+    # Directory walking (source_code module entry point)
+    # ------------------------------------------------------------------ #
+    def _progress(self, msg: str) -> None:
+        if self.progress_cb:
+            self.progress_cb(msg)
+
+    def iter_files(self, root: Path):
+        for path in sorted(root.rglob("*")):
+            if path.is_dir():
+                continue
+            if any(part in self.skip_dirs for part in path.parts):
+                continue
+            if path.suffix.lower() not in SCANNED_EXTENSIONS:
+                continue
+            yield path
+
+    def scan(self, root_path) -> List[Finding]:
+        """Walk ``root_path`` and evaluate the CVE ruleset over every source file."""
+        root = Path(root_path)
+        findings: List[Finding] = []
+        for path in self.iter_files(root):
+            try:
+                if path.stat().st_size > MAX_FILE_SIZE:
+                    logger.debug("Skipping large file %s", path)
+                    continue
+                raw = path.read_bytes()
+            except OSError as exc:  # pragma: no cover
+                logger.warning("Cannot read %s: %s", path, exc)
+                continue
+            if b"\x00" in raw[:4096]:  # binary heuristic
+                continue
+            try:
+                rel = str(path.relative_to(root))
+            except ValueError:  # pragma: no cover
+                rel = str(path)
+            rel = rel.replace("\\", "/")
+            self.files_scanned += 1
+            if self.verbose:
+                self._progress(f"source: {rel}")
+            findings.extend(self.scan_file(path, rel, raw))
+        logger.info("CVE scan complete: %d files, %d findings", self.files_scanned, len(findings))
         return findings
 
 
@@ -211,6 +324,24 @@ class _BaseDetector:
             confidence_reason=confidence_reason,
         )
 
+    @staticmethod
+    def _function_scope(source: str, fn_name: Optional[str]) -> Tuple[Optional[str], bool]:
+        """Resolve an optional function scope.
+
+        Returns ``(scope, bail)``:
+        * wildcard / missing ``function_name`` → ``(None, False)`` (analyse the
+          whole file — no scope restriction);
+        * a concrete function name that exists → ``(body, False)``;
+        * a concrete function name that is absent → ``(None, True)`` so the
+          caller can bail out (the rule targets a function this file lacks).
+        """
+        if fn_name in _WILDCARD_SCOPE:
+            return None, False
+        body = extract_function_body(source, fn_name)
+        if body is None:
+            return None, True
+        return body, False
+
     def _standard_evaluate(
         self,
         rule: Rule,
@@ -284,13 +415,9 @@ class _SQLiDetector(_BaseDetector):
     """Detect SQL injection CVEs (e.g. CVE-2025-67889)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        params = rule.params
-        fn_name = params.get("function_name")
-        scope = None
-        if fn_name:
-            scope = extract_function_body(source, fn_name)
-            if scope is None:
-                return None
+        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        if bail:
+            return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
 
 
@@ -366,28 +493,23 @@ class _PathTraversalDetector(_BaseDetector):
     """Detect path traversal CVEs (e.g. CVE-2025-67890, CVE-2023-47271)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        params = rule.params
-        fn_name = params.get("function_name")
-        scope = None
-        if fn_name:
-            scope = extract_function_body(source, fn_name)
-            if scope is None:
-                # Try alternate function names from source patterns.
-                return None
+        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        if bail:
+            return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
 
 
 class _CodeInjectionDetector(_BaseDetector):
-    """Detect code injection CVEs (e.g. CVE-2025-67893 LESS injection)."""
+    """Detect code injection CVEs (e.g. CVE-2025-67893 LESS injection).
+
+    Used by both the specific LESS CVE (``function_name: init``) and the generic
+    ``SAST-SRC-LESS-001`` rule (``function_name: "*"`` → whole-file scope).
+    """
 
     def evaluate(self, rule, rel, source, ojs_version):
-        params = rule.params
-        fn_name = params.get("function_name")
-        scope = None
-        if fn_name:
-            scope = extract_function_body(source, fn_name)
-            if scope is None:
-                return None
+        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        if bail:
+            return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
 
 
@@ -397,13 +519,18 @@ class _SmartyXSSDetector(_BaseDetector):
     Uses DOTALL multiline matching so Smarty tags and HTML attributes that span
     multiple lines are correctly detected.
 
-    CVE-SRC-007 and CVE-SRC-012 use per-candidate escape checking via inline
-    negative lookahead — no file-level safe_patch check, which would suppress
-    findings when an escaped expression appears elsewhere in the same file.
+    When any sink pattern carries an inline negative lookahead (``(?!``) the rule
+    is doing *per-candidate* escape checking, so the file-level safe_patch check
+    is skipped — otherwise an escaped expression elsewhere in the same template
+    would wrongly suppress a genuine unescaped sink.
     """
 
+    @staticmethod
+    def _has_inline_escape_guard(rule: Rule) -> bool:
+        return any("(?!" in p for p in rule.params.get("sink_patterns", []))
+
     def evaluate(self, rule, rel, source, ojs_version):
-        if rule.id in ("CVE-SRC-007", "CVE-SRC-012"):
+        if self._has_inline_escape_guard(rule):
             return self._evaluate_no_file_safe_patch(rule, rel, source, ojs_version)
         return self._evaluate_generic_smarty_xss(rule, rel, source, ojs_version)
 
@@ -524,13 +651,9 @@ class _HostHeaderDetector(_BaseDetector):
     """Detect Host header injection CVEs (e.g. CVE-2022-26616)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        params = rule.params
-        fn_name = params.get("function_name")
-        scope = None
-        if fn_name:
-            scope = extract_function_body(source, fn_name)
-            if scope is None:
-                return None
+        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        if bail:
+            return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
 
 
@@ -540,7 +663,47 @@ class _DeserializationDetector(_BaseDetector):
     Evaluation order: function body → class body → full file.
     Safe-patch check is scoped to the same text as source/sink search so that
     json_decode() in an unrelated function does not suppress the finding.
+
+    Detection combines the rule's literal sink patterns with a small intra-file
+    dataflow pass (request var → unserialize) so both the inline and the
+    two-step forms of the vulnerability are caught.
     """
+
+    @staticmethod
+    def _dataflow_sink(
+        full_source: str, scope_text: str
+    ) -> Optional[Tuple[str, int, str]]:
+        """Find a request-controlled value reaching ``unserialize()``.
+
+        Resolves variables assigned from ``getUserVar('param')`` inside
+        ``scope_text`` and checks whether any of them are later passed to
+        ``unserialize()`` (optionally wrapped in ``base64_decode``). Returns
+        ``(matched_sink, line_in_full_source, snippet)`` or ``None``.
+        """
+        params_found = set(
+            re.findall(r"getUserVar\s*\(\s*['\"](\w+)['\"]", scope_text, re.IGNORECASE)
+        )
+        if not params_found:
+            return None
+        req_vars = find_request_variables(scope_text, params_found)
+        if not req_vars:
+            return None
+        sinks = find_unserialize_sinks(scope_text, set(req_vars.keys()))
+        if not sinks:
+            return None
+
+        sinks.sort(key=lambda s: s.line_start)  # deterministic: first sink wins
+        sink = sinks[0]
+        snippet = (sink.snippet or "").strip()
+        # Map the snippet back to a line number in the full source for reporting.
+        line_no = sink.line_start
+        first_line = snippet.split("\n", 1)[0]
+        if first_line:
+            for i, line in enumerate(full_source.splitlines(), 1):
+                if first_line in line:
+                    line_no = i
+                    break
+        return f"unserialize() of request-controlled value (dataflow): {snippet}", line_no, snippet
 
     def evaluate(self, rule, rel, source, ojs_version):
         params = rule.params
@@ -610,12 +773,22 @@ class _DeserializationDetector(_BaseDetector):
             return None
         src_pat, src_line, src_snippet = source_hit
 
-        # 5) Sink patterns.
+        # 5) Sink: try the rule's literal sink patterns first (catches the
+        #    inline `unserialize($request->getUserVar(...))` form). If none match,
+        #    fall back to intra-file dataflow so the realistic two-step form
+        #    (`$x = getUserVar('filters'); ... unserialize($x);`) is still caught.
         sink_hit = self._check_sink_patterns(source, params.get("sink_patterns", []), scope)
-        if sink_hit is None:
-            logger.debug("CVE %s: sink pattern not found in scope (%s)", rule.id, scope_label)
-            return None
-        sink_pat, sink_line, sink_snippet = sink_hit
+        if sink_hit is not None:
+            sink_pat, sink_line, sink_snippet = sink_hit
+        else:
+            df = self._dataflow_sink(source, check_text)
+            if df is None:
+                logger.debug(
+                    "CVE %s: no sink (literal or dataflow) in scope (%s)", rule.id, scope_label
+                )
+                return None
+            sink_pat, sink_line, sink_snippet = df
+            logger.debug("CVE %s: dataflow sink at line %d (%s)", rule.id, sink_line, scope_label)
 
         confidence = "high" if ojs_version else "medium"
         conf_reason = params.get("confidence_reason", "")

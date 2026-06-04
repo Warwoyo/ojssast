@@ -150,17 +150,17 @@ def _scan(ruleset, source: str, rel: str):
 
 def test_cve_src_011_detects_getuservar_filters_to_unserialize(ruleset):
     ids = _scan(ruleset, VULN_PHP, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" in ids, f"Expected CVE-SRC-011 in: {ids}"
+    assert "CVE-SRC-19909" in ids, f"Expected CVE-SRC-011 in: {ids}"
 
 
 def test_cve_src_011_detects_static_request_call(ruleset):
     ids = _scan(ruleset, VULN_PHP_REQUEST_STATIC, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" in ids, f"Expected CVE-SRC-011 in: {ids}"
+    assert "CVE-SRC-19909" in ids, f"Expected CVE-SRC-011 in: {ids}"
 
 
 def test_cve_src_011_detects_base64_decode_wrapper(ruleset):
     ids = _scan(ruleset, VULN_PHP_BASE64, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" in ids, f"Expected CVE-SRC-011 in: {ids}"
+    assert "CVE-SRC-19909" in ids, f"Expected CVE-SRC-011 in: {ids}"
 
 
 def test_cve_src_011_detects_lib_pkp_path_variant(ruleset):
@@ -168,22 +168,22 @@ def test_cve_src_011_detects_lib_pkp_path_variant(ruleset):
         ruleset, VULN_PHP,
         "lib/pkp/classes/statistics/PKPStatisticsHelper.inc.php",
     )
-    assert "CVE-SRC-011" in ids, f"Expected CVE-SRC-011 for lib/pkp path"
+    assert "CVE-SRC-19909" in ids, f"Expected CVE-SRC-011 for lib/pkp path"
 
 
 def test_cve_src_011_detects_php_extension_variant(ruleset):
     ids = _scan(ruleset, VULN_PHP, "classes/statistics/PKPStatisticsHelper.php")
-    assert "CVE-SRC-011" in ids, f"Expected CVE-SRC-011 for .php extension"
+    assert "CVE-SRC-19909" in ids, f"Expected CVE-SRC-011 for .php extension"
 
 
 def test_cve_src_011_does_not_flag_json_decode(ruleset):
     ids = _scan(ruleset, SAFE_PHP_JSON_DECODE, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" not in ids
+    assert "CVE-SRC-19909" not in ids
 
 
 def test_cve_src_011_does_not_flag_trusted_unserialize(ruleset):
     ids = _scan(ruleset, SAFE_PHP_TRUSTED, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" not in ids
+    assert "CVE-SRC-19909" not in ids
 
 
 def test_cve_src_011_with_fixture_file(ruleset):
@@ -193,7 +193,7 @@ def test_cve_src_011_with_fixture_file(ruleset):
     text = php_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(php_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-011" in rule_ids, f"Expected CVE-SRC-011 from fixture, got: {rule_ids}"
+    assert "CVE-SRC-19909" in rule_ids, f"Expected CVE-SRC-011 from fixture, got: {rule_ids}"
 
 
 def test_cve_src_011_safe_patch_scoped_not_suppressed_by_other_function(ruleset):
@@ -212,7 +212,7 @@ class PKPStatisticsHelper {
 }
 """
     ids = _scan(ruleset, source, "classes/statistics/PKPStatisticsHelper.inc.php")
-    assert "CVE-SRC-011" in ids, "json_decode in safeMethod should NOT suppress finding in generateReport"
+    assert "CVE-SRC-19909" in ids, "json_decode in safeMethod should NOT suppress finding in generateReport"
 
 
 # --------------------------------------------------------------------------- #
@@ -235,23 +235,23 @@ class PKPToolsHandler extends Handler {
 def test_cve_src_011_detects_execute_function_name(ruleset):
     """execute() is a valid function_names variant for CVE-SRC-011."""
     ids = _scan(ruleset, VULN_PHP_EXECUTE, "pages/management/PKPToolsHandler.inc.php")
-    assert "CVE-SRC-011" in ids, f"execute() variant not detected: {ids}"
+    assert "CVE-SRC-19909" in ids, f"execute() variant not detected: {ids}"
 
 
 def test_cve_src_011_detects_ojs2_manager_path(ruleset):
     """pages/manager/ is the OJS 2.x path for PKPToolsHandler."""
     ids = _scan(ruleset, VULN_PHP_EXECUTE, "pages/manager/PKPToolsHandler.inc.php")
-    assert "CVE-SRC-011" in ids, f"OJS 2.x manager path not detected: {ids}"
+    assert "CVE-SRC-19909" in ids, f"OJS 2.x manager path not detected: {ids}"
 
 
 def test_cve_src_011_detects_lib_pkp_manager_path(ruleset):
-    """lib/pkp/pages/manager/ path variant must also be detected."""
+    """lib/pkp/pages/manager/ path variant must also be detected (path aliasing)."""
     ids = _scan(ruleset, VULN_PHP_EXECUTE, "lib/pkp/pages/manager/PKPToolsHandler.inc.php")
-    assert "CVE-SRC-011" in ids, f"lib/pkp/pages/manager path not detected: {ids}"
+    assert "CVE-SRC-19909" in ids, f"lib/pkp/pages/manager path not detected: {ids}"
 
 
 def test_cve_src_011_manager_fixture_file_detected(ruleset):
-    """Scan the OJS 2.x pages/manager fixture file and expect CVE-SRC-011."""
+    """Scan the OJS 2.x pages/manager fixture file and expect CVE-SRC-19909."""
     scanner = CVEScanner(ruleset)
     fixture_dir = Path(__file__).parent / "fixtures" / "ojs_cve_p1"
     php_path = fixture_dir / "pages" / "manager" / "PKPToolsHandler.inc.php"
@@ -259,7 +259,7 @@ def test_cve_src_011_manager_fixture_file_detected(ruleset):
     text = php_path.read_text(encoding="utf-8")
     findings = scanner.scan_file(php_path, rel, text.encode(), text)
     rule_ids = {f.rule_id for f in findings}
-    assert "CVE-SRC-011" in rule_ids, f"Expected CVE-SRC-011 from manager fixture, got: {rule_ids}"
+    assert "CVE-SRC-19909" in rule_ids, f"Expected CVE-SRC-19909 from manager fixture, got: {rule_ids}"
 
 
 def test_cve_src_011_execute_safe_patch_scoped(ruleset):
@@ -277,5 +277,5 @@ class PKPToolsHandler extends Handler {
     }
 }
 """
-    ids = _scan(ruleset, source, "pages/manager/PKPToolsHandler.inc.php")
-    assert "CVE-SRC-011" in ids, "json_decode in fetchReport must NOT suppress finding in execute()"
+    ids = _scan(ruleset, source, "pages/management/PKPToolsHandler.inc.php")
+    assert "CVE-SRC-19909" in ids, "json_decode in fetchReport must NOT suppress finding in execute()"

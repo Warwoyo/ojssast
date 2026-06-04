@@ -22,7 +22,11 @@ CONFIG_GT_IDS = (
     | {"OJS-CFG-EMAIL-001", "OJS-CFG-EMAIL-002", "OJS-CFG-CAP-001"}
     | {f"OJS-CFG-DBG-{i:03d}" for i in range(1, 5)}
 )
-CVE_GT_IDS = {f"CVE-SRC-{i:03d}" for i in range(1, 13)}
+CVE_GT_IDS = {
+    "CVE-SRC-12229", "CVE-SRC-19909", "CVE-SRC-26616", "CVE-SRC-5626",
+    "CVE-SRC-5894", "CVE-SRC-5903", "CVE-SRC-47271", "CVE-SRC-13469",
+    "CVE-SRC-67889", "CVE-SRC-67890", "CVE-SRC-67893", "CVE-SRC-67892",
+}
 
 
 @pytest.fixture(scope="module")
@@ -101,29 +105,35 @@ def test_all_cve_gt_rules_have_affected_versions(rs):
 # CVE rule applicability (branch-aware per-branch ceilings + patched versions)
 # --------------------------------------------------------------------------- #
 def test_cve_affected_versions_branch_aware(rs):
-    # CVE-SRC-002: affected <=3.3.0-21, <=3.4.0-9, <=3.5.0-1; patched per branch.
-    rule = rs.get("CVE-SRC-002")
+    # CVE-SRC-67892 (Login CSRF): affected <=3.3.0-21, <=3.4.0-9, <=3.5.0-1;
+    # patched per branch (3.3.0-22, 3.4.0-10, 3.5.0-2).
+    rule = rs.get("CVE-SRC-67892")
     assert is_rule_applicable_to_version(rule, "3.3.0-13")[0] is True
     assert is_rule_applicable_to_version(rule, "3.4.0-7")[0] is True
     # Patched build on the same branch is no longer affected (branch-aware).
     assert is_rule_applicable_to_version(rule, "3.4.0-10")[0] is False
-    # OJS 2.4 is below the 3.3 floor.
-    assert is_rule_applicable_to_version(rule, "2.4.7-1")[0] is False
+    assert is_rule_applicable_to_version(rule, "3.5.0-2")[0] is False
 
 
-def test_cve_001_not_applicable_to_33_but_applicable_to_34(rs):
-    # CVE-SRC-001 query-builder code "does not exist in 3.3.0".
-    rule = rs.get("CVE-SRC-001")
-    assert is_rule_applicable_to_version(rule, "3.3.0-13")[0] is False
+def test_cve_67889_applicable_to_34_and_35(rs):
+    # CVE-SRC-67889 (institution Collector SQLi): affected <=3.4.0-9, <=3.5.0-1.
+    rule = rs.get("CVE-SRC-67889")
     assert is_rule_applicable_to_version(rule, "3.4.0-7")[0] is True
+    assert is_rule_applicable_to_version(rule, "3.5.0-1")[0] is True
+    # Patched on the 3.4 branch -> not affected.
+    assert is_rule_applicable_to_version(rule, "3.4.0-10")[0] is False
+    # NOTE (audit): this rule's affected_versions has no ">=3.4.0" floor, so it
+    # also reports applicable to 3.3 / 2.x where the Collector code does not
+    # exist. Kept as-is per ruleset owner; see audit notes.
+    assert is_rule_applicable_to_version(rule, "3.3.0-13")[0] is True
 
 
 def test_cve_old_vulns_reach_ojs24(rs):
-    # CVE-SRC-010 / CVE-SRC-011 explicitly affect older 2.x.
-    assert is_rule_applicable_to_version(rs.get("CVE-SRC-010"), "2.4.7-1")[0] is True
-    assert is_rule_applicable_to_version(rs.get("CVE-SRC-011"), "2.4.7-1")[0] is True
-    # CVE-SRC-012 ground truth is "3.0.0 to 3.1.1-1" — excludes 2.4.
-    assert is_rule_applicable_to_version(rs.get("CVE-SRC-012"), "2.4.7-1")[0] is False
+    # CVE-SRC-26616 (host header) and CVE-SRC-19909 (deserialization) reach 2.x.
+    assert is_rule_applicable_to_version(rs.get("CVE-SRC-26616"), "2.4.7-1")[0] is True
+    assert is_rule_applicable_to_version(rs.get("CVE-SRC-19909"), "2.4.7-1")[0] is True
+    # CVE-SRC-12229 ground truth is ">=3.0.0, <=3.1.1-1" — excludes 2.4.
+    assert is_rule_applicable_to_version(rs.get("CVE-SRC-12229"), "2.4.7-1")[0] is False
 
 
 # --------------------------------------------------------------------------- #

@@ -60,8 +60,13 @@ EXPECTED_CONFIG_GT = {
 }
 
 EXTENSION_CONFIG_PREFIXES = ("OJS-CFG-NGX-", "OJS-CFG-EXT-")
-GENERIC_SOURCE_NON_GT_IDS = {"RULE-SRC-010", "RULE-SRC-011", "RULE-SRC-012"}
-CVE_GT_IDS = {f"CVE-SRC-{i:03d}" for i in range(1, 13)}
+# The 12 CVE ground-truth source rules (cve_rules.yaml). IDs are keyed by CVE
+# number rather than a running index.
+CVE_GT_IDS = {
+    "CVE-SRC-12229", "CVE-SRC-19909", "CVE-SRC-26616", "CVE-SRC-5626",
+    "CVE-SRC-5894", "CVE-SRC-5903", "CVE-SRC-47271", "CVE-SRC-13469",
+    "CVE-SRC-67889", "CVE-SRC-67890", "CVE-SRC-67893", "CVE-SRC-67892",
+}
 
 
 def test_all_config_ground_truth_ids_exist(ruleset):
@@ -141,15 +146,6 @@ def test_extension_rules_marked_non_ground_truth(ruleset):
         assert rid not in CONFIG_GT_IDS
         assert rule.params.get("ground_truth") is False, (
             f"Extension config rule {rid} must be marked ground_truth: false"
-        )
-
-
-def test_generic_source_rules_marked_non_ground_truth(ruleset):
-    for rid in GENERIC_SOURCE_NON_GT_IDS:
-        rule = ruleset.get(rid)
-        assert rule is not None, f"Rule {rid} is missing from the ruleset"
-        assert rule.params.get("ground_truth") is False, (
-            f"Generic source rule {rid} must be marked ground_truth: false"
         )
 
 

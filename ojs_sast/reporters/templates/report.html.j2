@@ -647,6 +647,9 @@
                         ${f.owasp ? `<span class="meta-tag">OWASP ${f.owasp}</span>` : ''}
                         <span class="meta-tag">${f.category.replace('_', ' ').toUpperCase()}</span>
                         <span class="meta-tag" style="font-family: Consolas, monospace;">${f.rule_id}</span>
+                        ${f.cvss_score != null ? `<span class="meta-tag">CVSS ${f.cvss_score}</span>` : ''}
+                        ${f.confidence ? `<span class="meta-tag">Confidence: ${f.confidence.toUpperCase()}</span>` : ''}
+                        ${(f.references || []).map(r => `<span class="meta-tag">${escapeHtml(r)}</span>`).join('')}
                     </div>
                 </div>
                 <div class="detail-section">
@@ -656,7 +659,8 @@
                 <div class="detail-section">
                     <h4>Location</h4>
                     <p style="font-family: Consolas, monospace; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border); display: block; word-break: break-all;">${f.file_path} : <strong>Line ${f.line_start}</strong></p>
-                </div>`;
+                </div>
+                ${renderEvidence(f)}`;
 
             if (f.taint_path) {
                 let steps = f.taint_path.intermediate_steps || [];
@@ -726,6 +730,34 @@
 
         function closeModal() {
             document.getElementById('modalOverlay').classList.remove('active');
+        }
+
+        function renderEvidence(f) {
+            // Structured detection rationale produced by the CVE scanner.
+            const rows = [];
+            if (f.matched_source) rows.push(['Tainted Source Pattern', f.matched_source, true]);
+            if (f.matched_sink) rows.push(['Vulnerable Sink Pattern', f.matched_sink, true]);
+            if (f.missing_patch_evidence) {
+                rows.push(['Missing Safe Patch', f.missing_patch_evidence, false]);
+            } else if (f.safe_patch_checked && f.safe_patch_checked.length) {
+                rows.push(['Safe Patches Checked (none present)', f.safe_patch_checked.join('   |   '), true]);
+            }
+            const versionInfo = f.affected_version_reasoning || f.applicability_reason;
+            if (versionInfo) rows.push(['Version Applicability', versionInfo, false]);
+            if (f.confidence_reason) rows.push(['Confidence Rationale', f.confidence_reason, false]);
+            if (!rows.length) return '';
+            const inner = rows.map(([label, value, mono]) => `
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 12px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">${label}</div>
+                    <div style="${mono ? "font-family: Consolas, 'Courier New', monospace; " : ''}font-size: 13px; color: var(--text-primary); word-break: break-word;">${escapeHtml(String(value))}</div>
+                </div>`).join('');
+            return `
+                <div class="detail-section">
+                    <h4>Detection Evidence</h4>
+                    <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid var(--border);">
+                        ${inner}
+                    </div>
+                </div>`;
         }
 
         function escapeHtml(text) {

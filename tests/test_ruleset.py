@@ -22,8 +22,9 @@ def test_rule_ids_unique(ruleset):
 
 
 def test_required_source_rules_present(ruleset):
-    for rid in ("RULE-SRC-001", "RULE-SRC-002", "RULE-SRC-003",
-                "RULE-SRC-004", "RULE-SRC-005", "RULE-SRC-006"):
+    # Source detection is now driven entirely by the structured CVE ruleset.
+    for rid in ("CVE-SRC-12229", "CVE-SRC-19909", "CVE-SRC-67889",
+                "CVE-SRC-67890", "CVE-SRC-67892", "CVE-SRC-47271"):
         assert ruleset.get(rid) is not None, rid
 
 
@@ -37,8 +38,8 @@ def test_all_regex_patterns_compile(ruleset):
 
 
 def test_severities_parsed(ruleset):
-    assert ruleset.get("RULE-SRC-005").severity is Severity.CRITICAL
-    assert ruleset.get("RULE-SRC-001").severity is Severity.HIGH
+    assert ruleset.get("CVE-SRC-47271").severity is Severity.CRITICAL
+    assert ruleset.get("CVE-SRC-19909").severity is Severity.HIGH
 
 
 def test_breached_password_list_embedded(ruleset):

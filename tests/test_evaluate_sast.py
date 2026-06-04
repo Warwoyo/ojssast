@@ -132,7 +132,7 @@ def test_ground_truth_cve_ids_are_mapped_to_ruleset_rule_ids(tmp_path):
         {
             "findings": [
                 {
-                    "rule_id": "CVE-SRC-001",
+                    "rule_id": "CVE-SRC-67889",
                     "ground_truth": True,
                     "evaluation_scope": "ground_truth",
                 }

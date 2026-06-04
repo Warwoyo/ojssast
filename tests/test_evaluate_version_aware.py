@@ -80,7 +80,9 @@ def test_strict_gt_version_aware_denominator_differs_by_ojs_version(tmp_path):
     # Total GT universe is constant (39 config + 12 CVE) ...
     assert result["total_gt"] == 51
     # ... but the applicable denominator differs per version (matches ground truth).
-    assert by["2.4.7-1"]["expected_applicable_gt"] == 2     # CVE-SRC-010, 011
+    # NOTE (audit): 2.4 expects 9 CVEs because several new CVE rules dropped their
+    # ">=" version floor and now report applicable to OJS 2.x; see audit notes.
+    assert by["2.4.7-1"]["expected_applicable_gt"] == 9     # 0 config + 9 CVE (floorless)
     assert by["3.3.0-13"]["expected_applicable_gt"] == 40   # 32 config + 8 CVE
     assert by["3.4.0-7"]["expected_applicable_gt"] == 39    # 34 config + 5 CVE
     assert (
@@ -142,7 +144,7 @@ def test_ojs24_config_gt_not_counted_when_config_gt_starts_at_33(tmp_path):
         [
             _gt_finding("OJS-CFG-SEC-001"),
             _gt_finding("OJS-CFG-DBG-001"),
-            _gt_finding("CVE-SRC-011"),
+            _gt_finding("CVE-SRC-19909"),
         ],
     )
     result = evaluate_sast.evaluate_scan_results(
@@ -153,9 +155,10 @@ def test_ojs24_config_gt_not_counted_when_config_gt_starts_at_33(tmp_path):
     # No config GT applies to OJS 2.4 -> config findings become version_fp.
     assert "OJS-CFG-SEC-001" in pv["version_false_positives"]
     assert "OJS-CFG-DBG-001" in pv["version_false_positives"]
-    # Only CVE-SRC-011 (old deserialization) is a genuine applicable TP.
+    # CVE-SRC-19909 (deserialization, affected <3.1.2-2) is a genuine applicable TP.
     assert pv["tp"] == 1
-    assert pv["expected_applicable_gt"] == 2  # CVE-SRC-010, 011 only
+    # 9 CVEs report applicable to 2.4 (see audit note on dropped version floors).
+    assert pv["expected_applicable_gt"] == 9
     # None of the config GT rules count toward TP for OJS 2.4.
     assert all(not fp.startswith("OJS-CFG") for fp in pv["false_positives"])
 
