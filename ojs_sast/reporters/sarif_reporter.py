@@ -132,7 +132,13 @@ def _build_result(finding: Finding) -> dict:
 
     # Add code snippet
     if finding.code_snippet:
-        result["locations"][0]["physicalLocation"]["region"]["snippet"] = {
+        phys_loc = result["locations"][0]["physicalLocation"]
+        if "region" not in phys_loc:
+            phys_loc["region"] = {
+                "startLine": 1,
+                "endLine": 1,
+            }
+        phys_loc["region"]["snippet"] = {
             "text": finding.code_snippet,
         }
 

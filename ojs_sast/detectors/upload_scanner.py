@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from ..models import Finding, Rule, Severity
+from ..models import Finding, Rule, Severity, resolve_rule_metadata
 from ..ruleset.loader import Ruleset
 
 logger = logging.getLogger("ojs_sast.upload")
@@ -177,6 +177,10 @@ class UploadScanner:
     def _mk(self, rule: Optional[Rule], rel: str, layer: str, detail: str,
             severity: Severity, mime: Optional[str], ext: str,
             fallback_cwe: str = "CWE-434", **kw) -> Finding:
+        metadata = (
+            resolve_rule_metadata(rule.id, rule.params)
+            if rule else resolve_rule_metadata("RULE-UPLOAD-000")
+        )
         return Finding(
             rule_id=rule.id if rule else "RULE-UPLOAD-000",
             module="upload_directory",
@@ -190,6 +194,7 @@ class UploadScanner:
             owasp=rule.owasp if rule else "A05:2021",
             cvss_score=rule.cvss_score if rule else None,
             cve_references=list(rule.cve_references) if rule else [],
+            **metadata,
             layer=layer,
             actual_mime=mime,
             declared_extension=ext or None,

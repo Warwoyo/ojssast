@@ -28,6 +28,7 @@ def mock_ojs(tmp_path):
     (root / "classes" / "core").mkdir(parents=True)
     (root / "dbscripts" / "xml").mkdir(parents=True)
     (root / "pages" / "issue").mkdir(parents=True)
+    (root / "templates" / "frontend" / "pages").mkdir(parents=True)
 
     (root / "classes" / "core" / "PKPApplication.php").write_text(
         "<?php\nclass PKPApplication {}\n", encoding="utf-8")
@@ -38,11 +39,19 @@ def mock_ojs(tmp_path):
     # Insecure config so config module produces findings.
     shutil.copy(FIXTURES / "config" / "insecure_config.inc.php", root / "config.inc.php")
 
-    # A vulnerable source file inside the install.
+    # A CVE-matching source file: submissions.tpl triggers CVE-SRC-5903
+    # (stored XSS, affected <3.3.0-16) on the 3.3.0-13 mock install.
+    shutil.copy(FIXTURES / "ojs_cve_p1" / "templates" / "frontend" / "pages" / "submissions.tpl",
+                root / "templates" / "frontend" / "pages" / "submissions.tpl")
+
+    # Generic vulnerable source files (kept for the upload/config tree realism;
+    # the CVE scanner only flags the known-CVE files above).
     shutil.copy(FIXTURES / "vulnerable_php" / "xss_sample.php",
                 root / "pages" / "issue" / "IssueHandler.inc.php")
     shutil.copy(FIXTURES / "vulnerable_php" / "sqli_sample.php",
                 root / "classes" / "core" / "SubmissionSearchDAO.inc.php")
+    shutil.copy(FIXTURES / "vulnerable_php" / "widget.js",
+                root / "classes" / "core" / "widget.js")
 
     # files_dir = "files" (relative -> inside webroot) holds a webshell.
     files_dir = root / "files"

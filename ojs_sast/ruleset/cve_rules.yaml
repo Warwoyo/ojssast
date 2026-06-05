@@ -1,453 +1,1276 @@
-# CVE-specific rules for ojs-sast.
-#
-# Each rule maps to EXACTLY one CVE from the OJS ground-truth dataset.
-# These rules are evaluated by the CVE scanner engine (cve_scanner.py)
-# using structured multi-condition matching — NOT generic regex.
-#
-# pattern_type: cve  →  handled exclusively by CVEScanner
-
 rules:
-  # ===== SQL INJECTION =====================================================
-  - id: CVE-SRC-001
-    name: "SQL Injection in Institution Collector (CVE-2025-67889)"
-    module: source_code
-    cwe: CWE-89
-    owasp: "A03:2021"
-    severity: CRITICAL
-    pattern_type: cve
-    cvss_score: 9.8
-    cve_references: ["CVE-2025-67889"]
-    description: >-
-      searchPhrase parameter is split into $words and interpolated into
-      DB::raw("lower('%{$word}%')") without $pdo->quote(), enabling SQL
-      injection in the Institution Collector (3.4.x/3.5.x only).
-    remediation: >-
-      Wrap interpolated values with $pdo->quote() before DB::raw(), or use
-      parameter bindings (?-placeholders).
-    params:
-      cve_id: CVE-2025-67889
-      vulnerability_type: sqli
-      affected_versions: ["<=3.4.0-9", "<=3.5.0-1"]
-      patched_versions: ["3.4.0-10", "3.5.0-2"]
-      file_path_patterns:
-        - "classes/institution/Collector.php"
-      class_name: Collector
-      function_name: getQueryBuilder
-      source_patterns:
-        - "searchPhrase"
-        - "\\$word"
-        - "\\$words"
-      sink_patterns:
-        - "DB::raw.*\\{\\$word"
-        - "DB::raw.*\\$word"
-      safe_patch_patterns:
-        - "\\$pdo->quote\\("
-        - "->addBinding\\("
-      confidence_reason: >-
-        File path matches classes/institution/Collector.php, function getQueryBuilder
-        contains DB::raw interpolation of $word without $pdo->quote().
 
-  # ===== LOGIN CSRF ========================================================
-  - id: CVE-SRC-002
-    name: "Login CSRF in Validation::login (CVE-2025-67892)"
-    module: source_code
-    cwe: CWE-352
-    owasp: "A01:2021"
-    severity: MEDIUM
-    pattern_type: cve
-    cvss_score: 6.5
-    cve_references: ["CVE-2025-67892"]
-    description: >-
-      Validation::login() processes credentials without $request->checkCSRF(),
-      allowing cross-site login forgery.
-    remediation: >-
-      Add $request->checkCSRF() guard before credential verification in
-      Validation::login().
-    params:
-      cve_id: CVE-2025-67892
-      vulnerability_type: csrf
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
-      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
-      file_path_patterns:
-        - "classes/security/Validation.inc.php"
-        - "classes/security/Validation.php"
-        - "lib/pkp/classes/security/Validation.inc.php"
-        - "lib/pkp/classes/security/Validation.php"
-      class_name: Validation
-      function_name: login
-      source_patterns:
-        - "\\$username"
-        - "\\$password"
-      sink_patterns:
-        - "verifyPassword|getAuthId|getPassword"
-      safe_patch_patterns:
-        - "checkCSRF\\(\\)"
-        - "\\$request->checkCSRF"
-      confidence_reason: >-
-        Validation::login() processes POST credentials without $request->checkCSRF().
+  # ===== REFLECTED CROSS-SITE SCRIPTING ===================================
 
-  # ===== PATH TRAVERSAL: NativeXmlIssueGalleyFilter ========================
-  - id: CVE-SRC-003
-    name: "Path Traversal in NativeXmlIssueGalleyFilter (CVE-2025-67890)"
-    module: source_code
-    cwe: CWE-22
-    owasp: "A01:2021"
-    severity: CRITICAL
-    pattern_type: cve
-    cvss_score: 9.8
-    cve_references: ["CVE-2025-67890"]
-    description: >-
-      XML file_name tag content is passed to setServerFileName() without
-      sanitization, enabling path traversal and arbitrary file write (RCE).
-    remediation: >-
-      Sanitize with preg_replace('/[^a-z0-9\.\-]+/', '', strtolower($name))
-      and prepend uniqid() before setServerFileName().
-    params:
-      cve_id: CVE-2025-67890
-      vulnerability_type: path_traversal
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
-      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
-      file_path_patterns:
-        - "plugins/importexport/native/filter/NativeXmlIssueGalleyFilter.php"
-        - "plugins/importexport/native/filter/NativeXmlIssueGalleyFilter.inc.php"
-      function_name: handleElement
-      source_patterns:
-        - "textContent"
-        - "\\$o->textContent"
-      sink_patterns:
-        - "setServerFileName\\s*\\("
-      safe_patch_patterns:
-        - "preg_replace\\s*\\(\\s*['\"]/?\\[\\^a-z"
-        - "strtolower\\s*\\(.*textContent"
-        - "basename\\s*\\("
-      confidence_reason: >-
-        XML textContent flows into setServerFileName() without regex sanitization.
+  - id: CVE-SRC-12229
 
-  # ===== PATH TRAVERSAL: NativeXml cover_image =============================
-  - id: CVE-SRC-004
-    name: "Path Traversal in NativeXml cover_image import (CVE-2023-47271)"
-    module: source_code
-    cwe: CWE-22
-    owasp: "A01:2021"
-    severity: CRITICAL
-    pattern_type: cve
-    cvss_score: 9.8
-    cve_references: ["CVE-2023-47271"]
-    description: >-
-      XML cover_image tag content flows to file_put_contents() without strict
-      filename sanitization, enabling arbitrary file write/RCE.
-    remediation: >-
-      Apply uniqid() prefix and preg_replace('/[^a-z0-9\.\-]+/', '') before
-      using the filename in file_put_contents().
-    params:
-      cve_id: CVE-2023-47271
-      vulnerability_type: path_traversal
-      affected_versions: ["<=3.4.0-3", "<=3.3.0-15"]
-      patched_versions: ["3.4.0-4", "3.3.0-16"]
-      file_path_patterns:
-        - "plugins/importexport/native/filter/PKPNativeFilterHelper.php"
-        - "plugins/importexport/native/filter/NativeFilterHelper.inc.php"
-        - "plugins/importexport/native/filter/NativeFilterHelper.php"
-        - "plugins/importexport/native/filter/NativeXmlPublicationFilter.inc.php"
-        - "plugins/importexport/native/filter/NativeXmlPublicationFilter.php"
-        - "lib/pkp/plugins/importexport/native/filter/PKPNativeFilterHelper.php"
-      function_name: parsePublicationCover
-      source_patterns:
-        - "textContent"
-        - "\\$n->textContent"
-        - "cover_image"
-      sink_patterns:
-        - "file_put_contents\\s*\\("
-        - "uploadName"
-      safe_patch_patterns:
-        - "preg_replace\\s*\\(\\s*['\"]/?\\[\\^a-z"
-        - "uniqid\\s*\\("
-        - "basename\\s*\\(.*preg_replace"
-      confidence_reason: >-
-        XML cover_image textContent used as filename for file_put_contents()
-        without strict regex sanitization.
+    name: "Reflected XSS in Search Page authors Field (CVE-2018-12229)"
 
-  # ===== LESS CODE INJECTION ===============================================
-  - id: CVE-SRC-005
-    name: "LESS Code Injection via baseColour (CVE-2025-67893)"
     module: source_code
-    cwe: CWE-94
-    owasp: "A03:2021"
-    severity: HIGH
-    pattern_type: cve
-    cvss_score: 8.1
-    cve_references: ["CVE-2025-67893"]
-    description: >-
-      baseColour theme option is concatenated into $additionalLessVariables
-      without hex-colour validation, enabling LESS code injection via
-      Less_Parser (SSRF/local file read).
-    remediation: >-
-      Validate with preg_match('/^#[0-9a-fA-F]{1,6}$/', $value) in both
-      init() and saveOption().
-    params:
-      cve_id: CVE-2025-67893
-      vulnerability_type: code_injection
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
-      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
-      file_path_patterns:
-        - "plugins/themes/default/DefaultThemePlugin.inc.php"
-        - "plugins/themes/default/DefaultThemePlugin.php"
-      class_name: DefaultThemePlugin
-      function_name: init
-      source_patterns:
-        - "getOption\\s*\\(\\s*['\"]baseColour['\"]\\s*\\)"
-      sink_patterns:
-        - "additionalLessVariables\\s*\\[\\]\\s*=.*@bg-base"
-        - "compileLess"
-      safe_patch_patterns:
-        - "preg_match\\s*\\(\\s*['\"].*\\#\\[0-9a-fA-F\\]"
-      confidence_reason: >-
-        getOption('baseColour') concatenated into LESS variables without
-        hex-colour regex validation.
 
-  # ===== STORED XSS: Manual Payment Instructions ===========================
-  - id: CVE-SRC-006
-    name: "Stored XSS in Manual Payment Instructions (CVE-2025-13469)"
-    module: source_code
     cwe: CWE-79
-    owasp: "A03:2021"
-    severity: MEDIUM
-    pattern_type: cve
-    cvss_score: 4.8
-    cve_references: ["CVE-2025-13469"]
-    description: >-
-      {$manualInstructions|nl2br} is rendered without |strip_unsafe_html,
-      enabling stored XSS via the Manual Payment plugin configuration.
-    remediation: >-
-      Change to {$manualInstructions|strip_unsafe_html|nl2br}.
-    params:
-      cve_id: CVE-2025-13469
-      vulnerability_type: smarty_xss
-      affected_versions: ["<=3.3.0", "<=3.4.0", "<=3.5.0"]
-      file_path_patterns:
-        - "plugins/paymethod/manual/templates/paymentForm.tpl"
-      source_patterns:
-        - "\\$manualInstructions"
-      sink_patterns:
-        - "\\{\\$manualInstructions\\|nl2br\\}"
-        - "\\{\\$manualInstructions[^}]*\\}"
-      safe_patch_patterns:
-        - "\\$manualInstructions\\|strip_unsafe_html"
-        - "\\$manualInstructions\\|escape"
-      confidence_reason: >-
-        {$manualInstructions|nl2br} in paymentForm.tpl without |strip_unsafe_html.
 
-  # ===== STORED XSS: Section Title =========================================
-  - id: CVE-SRC-007
-    name: "Stored XSS in Section Title (CVE-2023-5903)"
-    module: source_code
-    cwe: CWE-79
     owasp: "A03:2021"
-    severity: MEDIUM
-    pattern_type: cve
-    cvss_score: 5.4
-    cve_references: ["CVE-2023-5903"]
-    description: >-
-      {translate} tag passes $section->getLocalizedTitle() without |escape in
-      submissions.tpl, enabling stored XSS.
-    remediation: >-
-      Add |escape modifier: name=$section->getLocalizedTitle()|escape.
-    params:
-      cve_id: CVE-2023-5903
-      vulnerability_type: smarty_xss
-      affected_versions: ["<3.3.0-16"]
-      file_path_patterns:
-        - "templates/frontend/pages/submissions.tpl"
-      source_patterns:
-        - "getLocalizedTitle\\(\\)"
-      sink_patterns:
-        - "\\{translate.*name=.*getLocalizedTitle\\(\\)(?!\\|escape)"
-      safe_patch_patterns:
-        - "getLocalizedTitle\\(\\)\\|escape"
-      confidence_reason: >-
-        {translate} tag in submissions.tpl uses getLocalizedTitle() without |escape.
 
-  # ===== STORED XSS: Issue Title (PHP) =====================================
-  - id: CVE-SRC-008
-    name: "Stored XSS in Issue Title via PHP grid (CVE-2023-5894)"
-    module: source_code
-    cwe: CWE-79
-    owasp: "A03:2021"
     severity: MEDIUM
-    pattern_type: cve
-    cvss_score: 5.4
-    cve_references: ["CVE-2023-5894"]
-    description: >-
-      $issue->getIssueIdentification() is passed to __() translation function
-      without htmlspecialchars() in IssueGridCellProvider/IssueGridRow,
-      enabling stored XSS in the Edit Issue modal.
-    remediation: >-
-      Wrap with htmlspecialchars($issue->getIssueIdentification()).
-    params:
-      cve_id: CVE-2023-5894
-      vulnerability_type: php_xss
-      affected_versions: ["<3.3.0-16", "<=3.4.0-3"]
-      patched_versions: ["3.3.0-16", "3.4.0-4"]
-      file_path_patterns:
-        - "controllers/grid/issues/IssueGridCellProvider.inc.php"
-        - "controllers/grid/issues/IssueGridCellProvider.php"
-        - "controllers/grid/issues/IssueGridRow.inc.php"
-        - "controllers/grid/issues/IssueGridRow.php"
-      source_patterns:
-        - "getIssueIdentification\\(\\)"
-      sink_patterns:
-        - "__\\(.*getIssueIdentification\\(\\)"
-        - "editor\\.issues\\.editIssue"
-      safe_patch_patterns:
-        - "htmlspecialchars\\s*\\(.*getIssueIdentification"
-      confidence_reason: >-
-        getIssueIdentification() passed to __() without htmlspecialchars().
 
-  # ===== CSRF: PaymentTypesForm ============================================
-  - id: CVE-SRC-009
-    name: "CSRF in PaymentTypesForm (CVE-2023-5626)"
-    module: source_code
-    cwe: CWE-352
-    owasp: "A01:2021"
-    severity: HIGH
     pattern_type: cve
-    cvss_score: 8.8
-    cve_references: ["CVE-2023-5626"]
-    description: >-
-      PaymentTypesForm __construct() lacks FormValidatorCSRF, enabling CSRF
-      attacks on payment type configuration.
-    remediation: >-
-      Add $this->addCheck(new FormValidatorCSRF($this)) to the constructor.
-    params:
-      cve_id: CVE-2023-5626
-      vulnerability_type: csrf
-      affected_versions: ["<3.3.0-16"]
-      patched_versions: ["3.3.0-16"]
-      file_path_patterns:
-        - "classes/subscription/form/PaymentTypesForm.inc.php"
-        - "classes/subscription/form/PaymentTypesForm.php"
-      class_name: PaymentTypesForm
-      function_name: __construct
-      source_patterns:
-        - "getUserVar|\\$_POST"
-      sink_patterns:
-        - "addSetting|execute|save"
-      safe_patch_patterns:
-        - "FormValidatorCSRF"
-        - "addCheck.*FormValidatorCSRF"
-      confidence_reason: >-
-        PaymentTypesForm constructor missing FormValidatorCSRF check.
 
-  # ===== HOST HEADER XSS ==================================================
-  - id: CVE-SRC-010
-    name: "Host Header Injection / XSS (CVE-2022-26616)"
-    module: source_code
-    cwe: CWE-79
-    owasp: "A03:2021"
-    severity: MEDIUM
-    pattern_type: cve
     cvss_score: 6.1
-    cve_references: ["CVE-2022-26616"]
-    description: >-
-      PKPRequest::getServerHost() uses HTTP_X_FORWARDED_HOST / HTTP_HOST
-      without validation against an allowed_hosts whitelist, enabling
-      Host header injection for reflected XSS and token leakage.
-    remediation: >-
-      Add allowed_hosts whitelist check using Config::getVar('general',
-      'allowed_hosts') and in_array() validation.
-    params:
-      cve_id: CVE-2022-26616
-      vulnerability_type: host_header
-      affected_versions: ["<=3.3.0-8", "<=3.2.1-3"]
-      patched_versions: ["3.3.0-9"]
-      file_path_patterns:
-        - "classes/core/PKPRequest.inc.php"
-        - "classes/core/PKPRequest.php"
-        - "lib/pkp/classes/core/PKPRequest.inc.php"
-        - "lib/pkp/classes/core/PKPRequest.php"
-      class_name: PKPRequest
-      function_name: getServerHost
-      source_patterns:
-        - "HTTP_X_FORWARDED_HOST"
-        - "HTTP_HOST"
-        - "_SERVER.*HOST"
-      sink_patterns:
-        - "_serverHost\\s*="
-        - "\\$this->_serverHost"
-      safe_patch_patterns:
-        - "allowed_hosts"
-        - "in_array.*strtolower.*serverHost"
-        - "Config::getVar.*allowed_hosts"
-      confidence_reason: >-
-        HTTP host headers used to set _serverHost without allowed_hosts validation.
 
-  # ===== DESERIALIZATION ===================================================
-  - id: CVE-SRC-011
-    name: "Deserialization of Untrusted Data in Report Generator (CVE-2019-19909)"
-    module: source_code
-    cwe: CWE-502
-    owasp: "A08:2021"
-    severity: HIGH
-    pattern_type: cve
-    cvss_score: 8.8
-    cve_references: ["CVE-2019-19909"]
-    description: >-
-      unserialize() is called on user-controlled $request->getUserVar('filters')
-      and orderBy parameters in the Report Generator, enabling PHP object
-      injection and RCE.
-    remediation: >-
-      Replace unserialize() with json_decode() for data interchange.
-    params:
-      cve_id: CVE-2019-19909
-      vulnerability_type: deserialization
-      affected_versions: ["<3.1.2-2"]
-      patched_versions: ["3.1.2-2"]
-      file_path_patterns:
-        - "pages/management/PKPToolsHandler.inc.php"
-        - "pages/management/PKPToolsHandler.php"
-        - "lib/pkp/pages/management/PKPToolsHandler.inc.php"
-        - "classes/statistics/PKPStatisticsHelper.inc.php"
-        - "classes/statistics/PKPStatisticsHelper.php"
-        - "lib/pkp/classes/statistics/PKPStatisticsHelper.inc.php"
-      function_name: generateReport
-      source_patterns:
-        - "getUserVar\\s*\\(\\s*['\"]filters['\"]"
-        - "getUserVar\\s*\\(.*orderBy"
-      sink_patterns:
-        - "unserialize\\s*\\("
-      safe_patch_patterns:
-        - "json_decode\\s*\\("
-      confidence_reason: >-
-        getUserVar('filters') passed to unserialize() in report generation flow.
-
-  # ===== REFLECTED XSS: Search Page ========================================
-  - id: CVE-SRC-012
-    name: "Reflected XSS in Search Page (CVE-2018-12229)"
-    module: source_code
-    cwe: CWE-79
-    owasp: "A03:2021"
-    severity: MEDIUM
-    pattern_type: cve
-    cvss_score: 6.1
     cve_references: ["CVE-2018-12229"]
+
     description: >-
-      {$authors} is rendered in an HTML value attribute without |escape in
-      search.tpl, enabling reflected XSS via the authors search parameter.
+
+      The frontend search page renders the authors search parameter directly
+      into an HTML input value attribute without escaping. Because the authors
+      value comes from a URL or GET parameter, an unauthenticated attacker may
+      craft a malicious search URL that breaks out of the value attribute and
+      injects HTML or JavaScript into the victim's browser.
+
     remediation: >-
-      Add |escape modifier: value="{$authors|escape}".
+
+      Escape the authors variable before rendering it inside the HTML attribute.
+      In Smarty templates, append the |escape modifier when outputting dynamic
+      values inside attributes. The safe pattern is value="{$authors|escape}".
+      Review other search form fields and ensure all URL-derived values rendered
+      into HTML attributes are escaped.
+
     params:
+
       cve_id: CVE-2018-12229
-      vulnerability_type: smarty_xss
-      affected_versions: ["<=3.1.1-1"]
+
+      vulnerability_type: reflected_xss
+
+      affected_versions: [">=3.0.0", "<=3.1.1-1"]
+
       patched_versions: ["3.1.1-2"]
+
       file_path_patterns:
-        - "templates/frontend/pages/search.tpl"
+
+        - "templates/frontend/pages/search\\.tpl$"
+
+        - "templates/search/search\\.tpl$"
+
+        - "templates/search/advancedSearch\\.tpl$"
+
+      class_name: "*"
+
+      function_name: "Smarty Template Variable Interpolation"
+
       source_patterns:
+
+        - "name=\"authors\""
+
+        - "value=\"\\{\\$authors"
+
         - "\\$authors"
+
       sink_patterns:
-        - 'value="\{\\$authors\}"'
-        - "\\{\\$authors(?!\\|escape)[^}]*\\}"
+
+        - "<input[^>]+name=\"authors\"[^>]+value=\"\\{\\$authors\\}\""
+
+        - "<input[^>]+value=\"\\{\\$authors\\}\"[^>]+name=\"authors\""
+
+        - "value=\"\\{\\$authors\\}\""
+
+        - "\\{\\$authors\\}(?!\\|escape)"
+
       safe_patch_patterns:
-        - "\\$authors\\|escape"
+
+        - "value=\"\\{\\$authors\\|escape\\}\""
+
+        - "\\{\\$authors\\|escape\\}"
+
+        - "\\|escape"
+
+        - "htmlspecialchars"
+
+        - "htmlentities"
+
       confidence_reason: >-
-        {$authors} in search.tpl value attribute without |escape modifier.
+
+        The search.tpl template renders the URL-controlled authors value inside
+        an HTML input value attribute without the Smarty |escape modifier. The
+        patched implementation changes value="{$authors}" to
+        value="{$authors|escape}".
+        
+  # ===== INSECURE DESERIALIZATION / PHP OBJECT INJECTION ==================
+
+  - id: CVE-SRC-19909
+
+    name: "Deserialization of Untrusted Data in Report Generator (CVE-2019-19909)"
+
+    module: source_code
+
+    cwe: CWE-502
+
+    owasp: "A08:2021"
+
+    severity: HIGH
+
+    pattern_type: cve
+
+    cvss_score: 8.8
+
+    cve_references: ["CVE-2019-19909"]
+
+    description: >-
+
+      The report generator reads filters and orderBy values from URL parameters
+      using $request->getUserVar() and passes them to unserialize(). Because
+      these values can be attacker-controlled, PHP may instantiate arbitrary
+      serialized objects and invoke magic methods such as __wakeup() or
+      __destruct(). In vulnerable deployments, this may lead to PHP object
+      injection and code execution.
+
+    remediation: >-
+
+      Do not call unserialize() on request-controlled data. Replace serialized
+      URL parameters with JSON encoding and decoding, using json_encode() when
+      generating report URLs and json_decode() when reading filters or orderBy
+      values. If unserialize() is unavoidable for trusted legacy data, use
+      allowed_classes => false and ensure the input cannot be modified by end
+      users.
+
+    params:
+
+      cve_id: CVE-2019-19909
+
+      vulnerability_type: insecure_deserialization
+
+      affected_versions: ["<3.1.2-2"]
+
+      patched_versions: ["3.1.2-2"]
+
+      file_path_patterns:
+
+        - "pages/management/PKPToolsHandler\\.inc\\.php$"
+
+        - "pages/manager/PKPToolsHandler\\.inc\\.php$"
+
+        - "classes/statistics/PKPStatisticsHelper\\.inc\\.php$"
+
+      class_name: "*"
+
+      function_name: "*"
+
+      source_patterns:
+
+        - "\\$request->getUserVar\\s*\\(\\s*['\"]filters['\"]\\s*\\)"
+
+        - "\\$request->getUserVar\\s*\\(\\s*['\"]orderBy['\"]\\s*\\)"
+
+        - "filters"
+
+        - "orderBy"
+
+        - "serialize\\s*\\("
+
+        - "unserialize\\s*\\("
+
+      sink_patterns:
+
+        - "\\$filters\\s*=\\s*unserialize\\s*\\(\\s*\\$request->getUserVar\\s*\\(\\s*['\"]filters['\"]\\s*\\)\\s*\\)"
+
+        - "\\$orderBy\\s*=\\s*unserialize\\s*\\(\\s*\\$orderBy\\s*\\)"
+
+        - "unserialize\\s*\\(\\s*\\$request->getUserVar\\s*\\("
+
+        - "['\"]filters['\"]\\s*=>\\s*serialize\\s*\\(\\s*\\$filter\\s*\\)"
+
+        - "\\$args\\s*\\[\\s*['\"]orderBy['\"]\\s*\\]\\s*=\\s*serialize\\s*\\(\\s*\\$orderBy\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "json_decode\\s*\\(\\s*\\$request->getUserVar\\s*\\(\\s*['\"]filters['\"]\\s*\\)\\s*\\)"
+
+        - "json_decode\\s*\\(\\s*\\$orderBy\\s*\\)"
+
+        - "json_encode\\s*\\(\\s*\\$filter\\s*\\)"
+
+        - "json_encode\\s*\\(\\s*\\$orderBy\\s*\\)"
+
+        - "allowed_classes\\s*=>\\s*false"
+
+        - "unserialize\\s*\\([^,]+,\\s*\\[\\s*['\"]allowed_classes['\"]\\s*=>\\s*false\\s*\\]"
+
+      confidence_reason: >-
+
+        The affected report generation flow reads filters or orderBy from
+        request parameters and passes the value into unserialize(). The companion
+        URL generation logic serializes filter and orderBy values into URL
+        arguments. The patched implementation replaces serialize/unserialize
+        with json_encode/json_decode.
+
+  # ===== HOST HEADER INJECTION / REFLECTED XSS ============================
+
+  - id: CVE-SRC-26616
+
+    name: "Reflected XSS via Host Header Injection in getServerHost (CVE-2022-26616)"
+
+    module: source_code
+
+    cwe: CWE-79
+
+    owasp: "A03:2021"
+
+    severity: MEDIUM
+
+    pattern_type: cve
+
+    cvss_score: 6.1
+
+    cve_references: ["CVE-2022-26616"]
+
+    description: >-
+
+      PKPRequest::getServerHost() resolves the server host from untrusted HTTP
+      headers such as HTTP_X_FORWARDED_HOST, HTTP_HOST, or SERVER_NAME. In
+      vulnerable versions, the selected host value is assigned directly to
+      $this->_serverHost and later used to build absolute URLs. An unauthenticated
+      attacker can manipulate the Host or X-Forwarded-Host header, causing
+      attacker-controlled host content to be reflected into generated URLs,
+      pages, or emails. This may lead to reflected XSS or sensitive token
+      leakage through attacker-controlled links.
+
+    remediation: >-
+
+      Validate host header values against an explicit allowlist before assigning
+      them as the canonical server host. Use a configuration value such as
+      Config::getVar('general', 'allowed_hosts'), decode it into an allowed host
+      array, normalize values to lowercase, and only accept the supplied host
+      when it matches the allowlist. Otherwise fall back to a trusted default
+      host. Do not use HTTP_HOST or HTTP_X_FORWARDED_HOST directly in URL
+      generation.
+
+    params:
+
+      cve_id: CVE-2022-26616
+
+      vulnerability_type: host_header_injection_reflected_xss
+
+      affected_versions: ["<=3.2.1-3", "<=3.3.0-8", "2.x"]
+
+      patched_versions: ["3.2.1-4", "3.3.0-9"]
+
+      file_path_patterns:
+
+        - "classes/core/PKPRequest\\.inc\\.php$"
+
+      class_name: PKPRequest
+
+      function_name: getServerHost
+
+      source_patterns:
+
+        - "\\$_SERVER\\s*\\[\\s*['\"]HTTP_X_FORWARDED_HOST['\"]\\s*\\]"
+
+        - "\\$_SERVER\\s*\\[\\s*['\"]HTTP_HOST['\"]\\s*\\]"
+
+        - "\\$_SERVER\\s*\\[\\s*['\"]SERVER_NAME['\"]\\s*\\]"
+
+        - "\\$this->_serverHost"
+
+        - "strtok\\s*\\("
+
+      sink_patterns:
+
+        - "\\$this->_serverHost\\s*=\\s*isset\\s*\\(\\s*\\$_SERVER\\s*\\[\\s*['\"]HTTP_X_FORWARDED_HOST['\"]\\s*\\]"
+
+        - "\\$this->_serverHost\\s*=.*\\$_SERVER\\s*\\[\\s*['\"]HTTP_X_FORWARDED_HOST['\"]\\s*\\]"
+
+        - "\\$this->_serverHost\\s*=.*\\$_SERVER\\s*\\[\\s*['\"]HTTP_HOST['\"]\\s*\\]"
+
+        - "\\$this->_serverHost\\s*=.*\\$_SERVER\\s*\\[\\s*['\"]SERVER_NAME['\"]\\s*\\]"
+
+        - "\\$this->_serverHost\\s*=\\s*strtok\\s*\\(\\s*\\$this->_serverHost\\s*,\\s*['\"],['\"]\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "Config::getVar\\s*\\(\\s*['\"]general['\"]\\s*,\\s*['\"]allowed_hosts['\"]\\s*\\)"
+
+        - "\\$allowedHosts"
+
+        - "json_decode\\s*\\(\\s*\\$allowedHosts\\s*\\)"
+
+        - "array_map\\s*\\(\\s*['\"]strtolower['\"]\\s*,\\s*json_decode\\s*\\("
+
+        - "in_array\\s*\\(\\s*strtolower\\s*\\(\\s*\\$serverHost\\s*\\)\\s*,\\s*\\$allowedHosts\\s*\\)"
+
+        - "\\$this->_serverHost\\s*=\\s*\\$default"
+
+      confidence_reason: >-
+
+        The getServerHost() implementation reads host values from HTTP headers
+        and assigns them to $this->_serverHost. A vulnerable implementation lacks
+        an allowed_hosts configuration lookup and in_array() allowlist check
+        before accepting the untrusted host value. The fixed implementation
+        validates the normalized host against Config::getVar('general',
+        'allowed_hosts') and falls back to the trusted default when validation
+        fails.
+
+  # ===== CROSS-SITE REQUEST FORGERY =======================================
+
+  - id: CVE-SRC-5626
+
+    name: "CSRF in Payment Types Form Missing FormValidatorCSRF (CVE-2023-5626)"
+
+    module: source_code
+
+    cwe: CWE-352
+
+    owasp: "A01:2021"
+
+    severity: HIGH
+
+    pattern_type: cve
+
+    cvss_score: 8.8
+
+    cve_references: ["CVE-2023-5626"]
+
+    description: >-
+
+      The PaymentTypesForm constructor defines validators for payment-related
+      fields but does not add a CSRF validator. Because the form performs
+      state-changing payment configuration updates, a privileged user's browser
+      may be tricked into submitting a forged request that alters subscription
+      or payment settings.
+
+    remediation: >-
+
+      Add a CSRF validator to the form constructor using
+      $this->addCheck(new FormValidatorCSRF($this));. Ensure all forms that
+      modify payment, subscription, configuration, user, or site settings
+      include equivalent CSRF protection before processing submissions.
+
+    params:
+
+      cve_id: CVE-2023-5626
+
+      vulnerability_type: csrf
+
+      affected_versions: ["<3.3.0-16"]
+
+      patched_versions: ["3.3.0-16"]
+
+      file_path_patterns:
+
+        - "classes/subscription/form/PaymentTypesForm\\.inc\\.php$"
+
+      class_name: PaymentTypesForm
+
+      function_name: "__construct"
+
+      source_patterns:
+
+        - "public\\s+function\\s+__construct\\s*\\("
+
+        - "FormValidatorCustom"
+
+        - "membershipFee"
+
+        - "manager\\.payment\\.form\\.numeric"
+
+        - "addCheck\\s*\\("
+
+      sink_patterns:
+
+        - "\\$this->addCheck\\s*\\(\\s*new\\s+FormValidatorCustom\\s*\\("
+
+        - "membershipFee"
+
+        - "is_numeric\\s*\\("
+
+        - "\\$membershipFee\\s*>=\\s*0"
+
+      safe_patch_patterns:
+
+        - "FormValidatorCSRF"
+
+        - "\\$this->addCheck\\s*\\(\\s*new\\s+FormValidatorCSRF\\s*\\(\\s*\\$this\\s*\\)\\s*\\)"
+
+      confidence_reason: >-
+
+        The PaymentTypesForm constructor contains form validation logic for
+        state-changing payment configuration fields but lacks
+        $this->addCheck(new FormValidatorCSRF($this)). The patched version adds
+        FormValidatorCSRF to protect payment type updates from forged requests.
+
+  # ===== STORED CROSS-SITE SCRIPTING ======================================
+
+  - id: CVE-SRC-5894
+
+    name: "Stored XSS in Issue Title Edit Modal (CVE-2023-5894)"
+
+    module: source_code
+
+    cwe: CWE-79
+
+    owasp: "A03:2021"
+
+    severity: MEDIUM
+
+    pattern_type: cve
+
+    cvss_score: 5.4
+
+    cve_references: ["CVE-2023-5894"]
+
+    description: >-
+
+      The issue title returned by $issue->getIssueIdentification() is passed
+      directly into the __() translation helper as the issueIdentification
+      parameter without HTML escaping. Because issue titles can be configured by
+      users with editor privileges, malicious HTML or JavaScript may be stored
+      and later rendered in the Edit Issue Ajax modal, resulting in stored
+      cross-site scripting.
+
+    remediation: >-
+
+      Escape issue titles before passing them into translation parameters that
+      may be rendered in HTML contexts. Wrap $issue->getIssueIdentification()
+      with htmlspecialchars() or an equivalent escaping function before passing
+      it to the __() helper. Ensure all translated modal titles, labels, and
+      messages that include user-controlled values are escaped before rendering.
+
+    params:
+
+      cve_id: CVE-2023-5894
+
+      vulnerability_type: stored_xss
+
+      affected_versions: ["<3.3.0-16", ">=3.4.0", "<3.4.0-4"]
+
+      patched_versions: ["3.3.0-16", "3.4.0-4"]
+
+      file_path_patterns:
+
+        - "controllers/grid/issues/IssueGridCellProvider\\.inc\\.php$"
+
+        - "controllers/grid/issues/IssueGridCellProvider\\.php$"
+
+        - "controllers/grid/issues/IssueGridRow\\.inc\\.php$"
+
+        - "controllers/grid/issues/IssueGridRow\\.php$"
+
+      class_name: "*"
+
+      function_name: "*"
+
+      source_patterns:
+
+        - "__\\s*\\("
+
+        - "editor\\.issues\\.editIssue"
+
+        - "issueIdentification"
+
+        - "\\$issue->getIssueIdentification\\s*\\("
+
+      sink_patterns:
+
+        - "__\\s*\\(\\s*['\"]editor\\.issues\\.editIssue['\"]\\s*,\\s*array\\s*\\(\\s*['\"]issueIdentification['\"]\\s*=>\\s*\\$issue->getIssueIdentification\\s*\\(\\s*\\)\\s*\\)"
+
+        - "__\\s*\\(\\s*['\"]editor\\.issues\\.editIssue['\"]\\s*,\\s*\\[\\s*['\"]issueIdentification['\"]\\s*=>\\s*\\$issue->getIssueIdentification\\s*\\(\\s*\\)\\s*\\]"
+
+        - "['\"]issueIdentification['\"]\\s*=>\\s*\\$issue->getIssueIdentification\\s*\\(\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "htmlspecialchars\\s*\\(\\s*\\$issue->getIssueIdentification\\s*\\(\\s*\\)\\s*\\)"
+
+        - "htmlentities\\s*\\(\\s*\\$issue->getIssueIdentification\\s*\\(\\s*\\)\\s*\\)"
+
+        - "htmlspecialchars\\s*\\("
+
+        - "htmlentities\\s*\\("
+
+        - "strip_unsafe_html\\s*\\("
+
+        - "escape"
+
+      confidence_reason: >-
+
+        The affected issue grid files build Edit Issue modal text using the
+        __() translation helper. A vulnerable implementation passes
+        $issue->getIssueIdentification() directly as the issueIdentification
+        translation parameter without htmlspecialchars() or equivalent escaping.
+        The patched implementation wraps the getter result with htmlspecialchars().
+
+  # ===== STORED CROSS-SITE SCRIPTING ======================================
+
+  - id: CVE-SRC-5903
+
+    name: "Stored XSS in Section Title Rendering on Submissions Page (CVE-2023-5903)"
+
+    module: source_code
+
+    cwe: CWE-79
+
+    owasp: "A03:2021"
+
+    severity: MEDIUM
+
+    pattern_type: cve
+
+    cvss_score: 5.4
+
+    cve_references: ["CVE-2023-5903"]
+
+    description: >-
+
+      The submissions page passes the localized section title into a Smarty
+      {translate} parameter without escaping. The value returned by
+      $section->getLocalizedTitle() may be controlled by a privileged user who
+      can create or edit journal sections. When rendered on the frontend
+      submissions page, malicious HTML or JavaScript in the section title may
+      execute in a victim's browser, resulting in stored cross-site scripting.
+
+    remediation: >-
+
+      Escape section titles before passing them into Smarty translation output.
+      Apply the |escape modifier to $section->getLocalizedTitle() in the
+      {translate} call. The safe pattern is:
+      name=$section->getLocalizedTitle()|escape. Also ensure other localized
+      title or string getters rendered in templates are escaped unless they are
+      intentionally sanitized rich text.
+
+    params:
+
+      cve_id: CVE-2023-5903
+
+      vulnerability_type: stored_xss
+
+      affected_versions: ["<3.3.0-16"]
+
+      patched_versions: ["3.3.0-16"]
+
+      file_path_patterns:
+
+        - "templates/frontend/pages/submissions\\.tpl$"
+
+      class_name: "*"
+
+      function_name: "Smarty Template Translation Rendering"
+
+      source_patterns:
+
+        - "\\{translate"
+
+        - "about\\.onlineSubmissions\\.submitToSection"
+
+        - "name=\\$section->getLocalizedTitle\\s*\\("
+
+        - "url=\\$sectionSubmissionUrl"
+
+      sink_patterns:
+
+        - "\\{translate\\s+key=['\"]about\\.onlineSubmissions\\.submitToSection['\"][^}]*name=\\$section->getLocalizedTitle\\s*\\(\\s*\\)(?!\\|escape)(?!\\|strip_unsafe_html)[^}]*\\}"
+
+        - "name=\\$section->getLocalizedTitle\\s*\\(\\s*\\)\\s+url=\\$sectionSubmissionUrl"
+
+        - "name=\\$section->getLocalizedTitle\\s*\\(\\s*\\)(?!\\|escape)"
+
+      safe_patch_patterns:
+
+        - "name=\\$section->getLocalizedTitle\\s*\\(\\s*\\)\\|escape"
+
+        - "name=\\$section->getLocalizedTitle\\s*\\(\\s*\\)\\|strip_unsafe_html"
+
+        - "\\|escape"
+
+        - "\\|strip_unsafe_html"
+
+      confidence_reason: >-
+
+        The submissions.tpl template renders the section title returned by
+        $section->getLocalizedTitle() inside a Smarty {translate} call without
+        the |escape modifier. The patched implementation appends |escape to the
+        localized section title before rendering it into the frontend DOM.
+
+  # ===== PATH TRAVERSAL / ARBITRARY FILE WRITE / RCE ======================
+
+  - id: CVE-SRC-47271
+
+    name: "RCE via Path Traversal in NativeImportExportPlugin cover_image (CVE-2023-47271)"
+
+    module: source_code
+
+    cwe: CWE-22
+
+    owasp: "A01:2021"
+
+    severity: CRITICAL
+
+    pattern_type: cve
+
+    cvss_score: 9.1
+
+    cve_references: ["CVE-2023-47271"]
+
+    description: >-
+
+      The Native XML import/export plugin reads the XML cover_image value from
+      DOMElement textContent and uses it as a server-side uploadName. The value
+      is later concatenated into a context file path and written with
+      file_put_contents() using decoded embed content. If the cover_image value
+      is not strictly sanitized, an authenticated user with access to the Native
+      XML import/export plugin may perform path traversal and write or overwrite
+      arbitrary files. In vulnerable deployments, this can lead to remote code
+      execution.
+
+    remediation: >-
+
+      Do not use XML-provided cover_image values directly as file names. Normalize
+      and strictly allowlist the filename before assigning it to uploadName.
+      Apply strtolower(), replace unsafe separators with safe characters,
+      remove all characters outside /[^a-z0-9\.\-]+/, wrap the result in
+      basename(), and prefix it with uniqid(). Also validate allowed extensions
+      and ensure the final resolved path remains inside the intended public file
+      directory before writing.
+
+    params:
+
+      cve_id: CVE-2023-47271
+
+      vulnerability_type: path_traversal_arbitrary_file_write_rce
+
+      affected_versions: ["<=3.3.0-15", "<=3.4.0-3"]
+
+      patched_versions: ["3.3.0-16", "3.4.0-4"]
+
+      file_path_patterns:
+
+        - "plugins/importexport/native/filter/PKPNativeFilterHelper\\.php$"
+
+        - "plugins/importexport/native/filter/NativeXmlPublicationFilter\\.inc\\.php$"
+
+        - "plugins/importexport/native/filter/NativeXmlPublicationFilter\\.php$"
+
+      class_name: "*"
+
+      function_name: parsePublicationCover
+
+      source_patterns:
+
+        - "case\\s+['\"]cover_image['\"]\\s*:"
+
+        - "\\$n->textContent"
+
+        - "\\$coverImage\\s*\\[\\s*['\"]uploadName['\"]\\s*\\]"
+
+        - "case\\s+['\"]embed['\"]\\s*:"
+
+      sink_patterns:
+
+        - "\\$coverImage\\s*\\[\\s*['\"]uploadName['\"]\\s*\\]\\s*=\\s*\\$n->textContent"
+
+        - "\\$coverImage\\s*\\[\\s*['\"]uploadName['\"]\\s*\\]\\s*=\\s*uniqid\\s*\\(\\s*\\)\\s*\\.\\s*['\"]-['\"]\\s*\\.\\s*basename\\s*\\(\\s*\\$n->textContent\\s*\\)"
+
+        - "\\$filePath\\s*=\\s*\\$publicFileManager->getContextFilesPath\\s*\\([^)]*\\)\\s*\\.\\s*['\"]\\/['\"]\\s*\\.\\s*\\$coverImage\\s*\\[\\s*['\"]uploadName['\"]\\s*\\]"
+
+        - "file_put_contents\\s*\\(\\s*\\$filePath\\s*,\\s*base64_decode\\s*\\(\\s*\\$n->textContent\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "uniqid\\s*\\(\\s*\\)\\s*\\.\\s*['\"]-['\"]\\s*\\.\\s*basename\\s*\\(\\s*preg_replace\\s*\\("
+
+        - "preg_replace\\s*\\("
+
+        - "\\/\\[\\^a-z0-9\\\\\\.\\\\\\-\\]\\+\\/"
+
+        - "str_replace\\s*\\("
+
+        - "strtolower\\s*\\(\\s*\\$n->textContent\\s*\\)"
+
+        - "basename\\s*\\("
+
+        - "realpath\\s*\\("
+
+      confidence_reason: >-
+
+        The parsePublicationCover() flow handles the cover_image XML element,
+        assigns $n->textContent or an insufficiently sanitized basename() value
+        to $coverImage['uploadName'], builds $filePath from that uploadName, and
+        writes decoded embed data with file_put_contents(). A safe
+        implementation applies strict allowlist filtering with preg_replace(),
+        str_replace(), strtolower(), basename(), and a uniqid() prefix before
+        the value can influence the final write path.
+
+  # ===== STORED CROSS-SITE SCRIPTING ======================================
+
+  - id: CVE-SRC-13469
+
+    name: "Stored XSS in Manual Payment Instructions (CVE-2025-13469)"
+
+    module: source_code
+
+    cwe: CWE-79
+
+    owasp: "A03:2021"
+
+    severity: MEDIUM
+
+    pattern_type: cve
+
+    cvss_score: 4.8
+
+    cve_references: ["CVE-2025-13469"]
+
+    description: >-
+
+      The Manual Payment Plugin renders the manualInstructions setting directly
+      into the payment checkout page using only the Smarty nl2br modifier.
+      The nl2br modifier preserves line breaks but does not neutralize unsafe
+      HTML or JavaScript. A high-privilege user who can configure manual payment
+      instructions may store malicious markup that later executes in a victim's
+      browser during checkout.
+
+    remediation: >-
+
+      Sanitize manualInstructions before rendering it in the Smarty template.
+      Apply the strip_unsafe_html modifier before nl2br, or use an equivalent
+      HTML escaping or sanitization mechanism. The fixed rendering pattern is
+      {$manualInstructions|strip_unsafe_html|nl2br}. Also ensure rich text
+      settings are sanitized server-side before being persisted.
+
+    params:
+
+      cve_id: CVE-2025-13469
+
+      vulnerability_type: stored_xss
+
+      affected_versions: ["3.3.0", "3.4.0", "3.5.0"]
+
+      patched_versions: []
+
+      file_path_patterns:
+
+        - "plugins/paymethod/manual/templates/paymentForm\\.tpl$"
+
+      class_name: "*"
+
+      function_name: "Smarty Template Translation Rendering"
+
+      source_patterns:
+
+        - "manualInstructions"
+
+        - "\\{\\$manualInstructions"
+
+        - "\\|nl2br"
+
+      sink_patterns:
+
+        - "<p>\\s*\\{\\$manualInstructions\\|nl2br\\}\\s*</p>"
+
+        - "\\{\\$manualInstructions\\|nl2br\\}"
+
+        - "\\{\\$manualInstructions(?![^}]*strip_unsafe_html)(?![^}]*escape)[^}]*\\}"
+
+      safe_patch_patterns:
+
+        - "\\{\\$manualInstructions\\|strip_unsafe_html\\|nl2br\\}"
+
+        - "\\|strip_unsafe_html"
+
+        - "\\|escape"
+
+        - "\\|htmlspecialchars"
+
+      confidence_reason: >-
+
+        The paymentForm.tpl template renders the manualInstructions variable
+        into the HTML body using only the nl2br modifier. A vulnerable template
+        lacks strip_unsafe_html, escape, or equivalent sanitization before the
+        value is inserted into the page.
+
+  # ===== SQL INJECTION =====================================================
+
+  - id: CVE-SRC-67889
+
+    name: "SQL Injection in Institution Collector searchPhrase (CVE-2025-67889)"
+
+    module: source_code
+
+    cwe: CWE-89
+
+    owasp: "A03:2021"
+
+    severity: HIGH
+
+    pattern_type: cve
+
+    cvss_score: 8.1
+
+    cve_references: ["CVE-2025-67889"]
+
+    description: >-
+
+      The Institution Collector searchPhrase parameter is split into words and
+      each word is interpolated into DB::raw() using double-quoted PHP string
+      interpolation. The code uses addcslashes($word, '%_'), but this only
+      escapes SQL LIKE wildcard characters and does not safely quote SQL string
+      literals. Because the interpolated value is passed to DB::raw() instead
+      of a prepared statement or PDO quoting, an authenticated user with access
+      to the Institutions API may perform SQL injection.
+
+    remediation: >-
+
+      Do not interpolate user-controlled values into DB::raw(). Use parameter
+      bindings where possible. If DB::raw() is unavoidable for this expression,
+      wrap the interpolated LIKE value with $pdo->quote(), for example
+      DB::raw("lower(" . $pdo->quote("%{$word}%") . ")"). Ensure the PDO object
+      is obtained from DB::connection()->getPdo() and passed into all closures
+      that build the affected query.
+
+    params:
+
+      cve_id: CVE-2025-67889
+
+      vulnerability_type: sqli
+
+      affected_versions: ["<=3.4.0-9", "<=3.5.0-1"]
+
+      patched_versions: ["3.4.0-10", "3.5.0-2"]
+
+      file_path_patterns:
+
+        - "classes/institution/Collector\\.php$"
+
+      class_name: Collector
+
+      function_name: getQueryBuilder
+
+      source_patterns:
+
+        - "searchPhrase"
+
+        - "\\$this->searchPhrase"
+
+        - "explode\\s*\\("
+
+        - "\\$words"
+
+        - "\\$word"
+
+        - "addcslashes\\s*\\(\\s*\\$word\\s*,\\s*['\"]%_['\"]\\s*\\)"
+
+      sink_patterns:
+
+        - "DB::raw\\s*\\(\\s*\"[^\"]*\\{\\$word\\}[^\"]*\"\\s*\\)"
+
+        - "DB::raw\\s*\\(\\s*\"[^\"]*\\$word[^\"]*\"\\s*\\)"
+
+        - "DB::raw\\s*\\(\\s*\"lower\\([^)]*\\$word[^)]*\\)\"\\s*\\)"
+
+        - "where\\s*\\(\\s*DB::raw\\s*\\(\\s*['\"]lower\\([^'\"]+\\)['\"]\\s*\\)\\s*,\\s*['\"]LIKE['\"]\\s*,\\s*DB::raw\\s*\\("
+
+      safe_patch_patterns:
+
+        - "DB::connection\\s*\\(\\s*\\)->getPdo\\s*\\(\\s*\\)"
+
+        - "\\$pdo->quote\\s*\\("
+
+        - "use\\s*\\(\\s*\\$word\\s*,\\s*\\$pdo\\s*\\)"
+
+        - "->addBinding\\s*\\("
+
+        - "whereRaw\\s*\\([^,]+,\\s*\\["
+
+        - "\\?\\s*[,\\)]"
+
+      confidence_reason: >-
+
+        File path matches classes/institution/Collector.php and function
+        getQueryBuilder contains searchPhrase processing into $words/$word.
+        The vulnerable query interpolates $word into DB::raw() for a LIKE
+        expression without $pdo->quote(), parameter binding, or an equivalent
+        SQL string-literal escaping mechanism.
+
+  # ===== PATH TRAVERSAL / ARBITRARY FILE WRITE ============================
+
+  - id: CVE-SRC-67890
+
+    name: "Path Traversal in NativeXmlIssueGalleyFilter file_name Handling (CVE-2025-67890)"
+
+    module: source_code
+
+    cwe: CWE-22
+
+    owasp: "A01:2021"
+
+    severity: HIGH
+
+    pattern_type: cve
+
+    cvss_score: 8.8
+
+    cve_references: ["CVE-2025-67890"]
+
+    description: >-
+
+      The Native XML import filter reads the XML file_name element and assigns
+      its textContent directly as the server-side file name using
+      setServerFileName(). Because the value is not sanitized, an authenticated
+      user with access to the Native XML import/export plugin may supply path
+      traversal sequences or unsafe path components. The resulting server-side
+      file name can later be used by file write logic, leading to arbitrary file
+      write or overwrite. In some deployments, this may lead to remote code
+      execution if the attacker can target a web-accessible path.
+
+    remediation: >-
+
+      Sanitize XML-provided file names before passing them to
+      setServerFileName(). Restrict the value to a strict allowlist of safe
+      characters, normalize it to lowercase, replace unsafe separators, and
+      remove any remaining characters outside the expected set. A safe patch
+      should use preg_replace() with an allowlist such as /[^a-z0-9\.\-]+/,
+      combined with str_replace(), strtolower(), and trim(), or an equivalent
+      basename plus allowlist validation strategy.
+
+    params:
+
+      cve_id: CVE-2025-67890
+
+      vulnerability_type: path_traversal_arbitrary_file_write
+
+      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+
+      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
+
+      file_path_patterns:
+
+        - "plugins/importexport/native/filter/NativeXmlIssueGalleyFilter\\.php$"
+
+      class_name: NativeXmlIssueGalleyFilter
+
+      function_name: handleElement
+
+      source_patterns:
+
+        - "case\\s+['\"]file_name['\"]\\s*:"
+
+        - "\\$o->textContent"
+
+        - "\\$issueFile->setServerFileName\\s*\\("
+
+      sink_patterns:
+
+        - "case\\s+['\"]file_name['\"]\\s*:\\s*\\$issueFile->setServerFileName\\s*\\(\\s*\\$o->textContent\\s*\\)"
+
+        - "\\$issueFile->setServerFileName\\s*\\(\\s*\\$o->textContent\\s*\\)"
+
+        - "setServerFileName\\s*\\(\\s*\\$o->textContent\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "preg_replace\\s*\\("
+
+        - "\\/\\[\\^a-z0-9\\\\\\.\\\\\\-\\]\\+\\/"
+
+        - "str_replace\\s*\\("
+
+        - "strtolower\\s*\\(\\s*\\$o->textContent\\s*\\)"
+
+        - "trim\\s*\\("
+
+        - "basename\\s*\\("
+
+      confidence_reason: >-
+
+        The handleElement() function in NativeXmlIssueGalleyFilter processes the
+        XML file_name element and passes $o->textContent directly into
+        setServerFileName(). A vulnerable implementation lacks strict filename
+        normalization or allowlist filtering before the value reaches server-side
+        file write handling.
+
+  # ===== LESS / CSS PREPROCESSOR CODE INJECTION ===========================
+
+  - id: CVE-SRC-67893
+
+    name: "LESS Code Injection in baseColour DefaultThemePlugin (CVE-2025-67893)"
+
+    module: source_code
+
+    cwe: CWE-94
+
+    owasp: "A03:2021"
+
+    severity: HIGH
+
+    pattern_type: cve
+
+    cvss_score: 0.0
+
+    cve_references: ["CVE-2025-67893"]
+
+    description: >-
+
+      The baseColour theme option is concatenated directly into a LESS variable
+      assignment without strict validation. An authenticated user with access to
+      the Theme Settings API may store a malicious baseColour value, which is
+      later inserted into $additionalLessVariables as @bg-base and parsed by the
+      LESS compiler. This can lead to LESS code injection, potentially enabling
+      SSRF or local file read depending on LESS parser behavior and runtime
+      configuration.
+
+    remediation: >-
+
+      Validate baseColour using a strict hexadecimal colour allowlist before
+      storing or using it. Reject or reset invalid values in saveOption(), and
+      revalidate the value in init() before concatenating it into LESS variables.
+      Use a pattern such as /^#[0-9a-fA-F]{1,6}$/ and fall back to a safe default
+      such as #1E6292 when validation fails.
+
+    params:
+
+      cve_id: CVE-2025-67893
+
+      vulnerability_type: less_code_injection
+
+      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+
+      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
+
+      file_path_patterns:
+
+        - "plugins/themes/default/DefaultThemePlugin\\.inc\\.php$"
+
+        - "plugins/themes/default/DefaultThemePlugin\\.php$"
+
+      class_name: DefaultThemePlugin
+
+      function_name: init
+
+      source_patterns:
+
+        - "baseColour"
+
+        - "\\$this->getOption\\(\\s*['\"]baseColour['\"]\\s*\\)"
+
+        - "\\$additionalLessVariables"
+
+        - "@bg-base"
+
+      sink_patterns:
+
+        - "\\$additionalLessVariables\\s*\\[\\s*\\]\\s*=\\s*['\"]@bg-base\\s*:\\s*['\"]\\s*\\.\\s*\\$this->getOption\\(\\s*['\"]baseColour['\"]\\s*\\)"
+
+        - "\\$additionalLessVariables\\s*\\[\\s*\\]\\s*=\\s*['\"]@bg-base\\s*:\\s*['\"]\\s*\\."
+
+        - "@bg-base\\s*:"
+
+        - "\\.\\s*\\$this->getOption\\(\\s*['\"]baseColour['\"]\\s*\\)"
+
+      safe_patch_patterns:
+
+        - "preg_match\\s*\\(\\s*['\"][/]\\^#\\[0-9a-fA-F\\]\\{1,6\\}\\$[/]['\"]\\s*,\\s*\\$baseColour\\s*\\)"
+
+        - "preg_match\\s*\\(\\s*['\"][/]\\^#\\[0-9a-fA-F\\]\\{1,6\\}\\$[/]['\"]\\s*,\\s*\\$value\\s*\\)"
+
+        - "\\$baseColour\\s*=\\s*['\"]#1E6292['\"]"
+
+        - "public\\s+function\\s+saveOption\\s*\\(\\s*\\$name\\s*,\\s*\\$value"
+
+      confidence_reason: >-
+
+        The DefaultThemePlugin init() function reads the baseColour option using
+        $this->getOption('baseColour') and concatenates it into the LESS variable
+        array as @bg-base without strict hexadecimal colour validation. The
+        patched implementation validates baseColour with /^#[0-9a-fA-F]{1,6}$/
+        and adds saveOption() validation before persisting the option.
+
+
+  # ===== GENERIC LESS VARIABLE INJECTION ==================================
+
+  - id: SAST-SRC-LESS-001
+
+    name: "Potential LESS Variable Injection from Unsanitized Theme Option"
+
+    module: source_code
+
+    cwe: CWE-94
+
+    owasp: "A03:2021"
+
+    severity: MEDIUM
+
+    pattern_type: regex
+
+    cvss_score: 6.5
+
+    cve_references: []
+
+    description: >-
+
+      A user-controlled or stored theme option appears to be concatenated into a
+      LESS variable assignment. If the value is not strictly allowlisted before
+      being passed to a LESS parser, an attacker may inject additional LESS
+      syntax. This may lead to server-side request forgery, local file read, or
+      other parser-dependent impact.
+
+    remediation: >-
+
+      Do not concatenate untrusted input directly into LESS, SASS, or CSS
+      preprocessor variables. Use strict allowlist validation based on the
+      expected value type. For colour values, require a hexadecimal colour format
+      such as /^#[0-9a-fA-F]{1,6}$/. Reject invalid values or replace them with
+      a safe default before compiling stylesheets.
+
+    params:
+
+      vulnerability_type: less_variable_injection
+
+      affected_versions: []
+
+      patched_versions: []
+
+      file_path_patterns:
+
+        - ".*\\.php$"
+
+        - ".*\\.inc\\.php$"
+
+      class_name: "*"
+
+      function_name: "*"
+
+      source_patterns:
+
+        - "getOption\\s*\\("
+
+        - "(baseColour|baseColor|colour|color|background|theme|stylesheet)"
+
+        - "\\$additionalLessVariables"
+
+      sink_patterns:
+
+        - "\\$additionalLessVariables\\s*\\[\\s*\\]\\s*=\\s*['\"]@[A-Za-z0-9_-]+\\s*:\\s*['\"]\\s*\\."
+
+        - "\\$additionalLessVariables\\s*\\[\\s*\\]\\s*=.*\\.\\s*\\$this->getOption\\s*\\("
+
+        - "@[A-Za-z0-9_-]+\\s*:.*\\$this->getOption\\s*\\("
+
+        - "Less_Parser"
+
+        - "compileLess\\s*\\("
+
+      safe_patch_patterns:
+
+        - "preg_match\\s*\\(\\s*['\"][/]\\^#\\[0-9a-fA-F\\]\\{1,6\\}\\$[/]['\"]"
+
+        - "preg_match\\s*\\(\\s*['\"][/]\\^#\\[0-9a-fA-F\\]\\{3,6\\}\\$[/]['\"]"
+
+        - "preg_match\\s*\\(\\s*['\"][/]\\^#\\[0-9a-fA-F\\]\\{6\\}\\$[/]['\"]"
+
+        - "in_array\\s*\\("
+
+        - "array_key_exists\\s*\\("
+
+      confidence_reason: >-
+
+        The rule detects PHP code that appends dynamic values into LESS variable
+        declarations, especially values loaded through getOption(). This pattern
+        is risky when the value is not constrained by a strict allowlist before
+        being parsed by a LESS compiler.
+
+  # ===== CROSS-SITE REQUEST FORGERY =======================================
+
+  - id: CVE-SRC-67892
+
+    name: "Login CSRF in Validation::login (CVE-2025-67892)"
+
+    module: source_code
+
+    cwe: CWE-352
+
+    owasp: "A01:2021"
+
+    severity: MEDIUM
+
+    pattern_type: cve
+
+    cvss_score: 6.5
+
+    cve_references: ["CVE-2025-67892"]
+
+    description: >-
+
+      The login handler processes authentication requests without validating
+      the submitted CSRF token on the server side. Although the login form may
+      send a csrfToken parameter, the server-side Validation::login() method
+      does not call $request->checkCSRF() before validating credentials and
+      establishing an authenticated session. This allows login CSRF, where an
+      attacker may force a victim browser to authenticate into an attacker-
+      controlled account.
+
+    remediation: >-
+
+      Validate the CSRF token server-side before processing login credentials.
+      In Validation::login(), obtain the request object using
+      Application::get()->getRequest() and call $request->checkCSRF(). Return
+      false immediately if the CSRF check fails. Ensure equivalent CSRF
+      protection is enforced for all state-changing authentication endpoints.
+
+    params:
+
+      cve_id: CVE-2025-67892
+
+      vulnerability_type: csrf
+
+      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+
+      patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
+
+      file_path_patterns:
+
+        - "classes/security/Validation\\.inc\\.php$"
+
+        - "classes/security/Validation\\.php$"
+
+      class_name: Validation
+
+      function_name: login
+
+      source_patterns:
+
+        - "public\\s+static\\s+function\\s+login\\s*\\("
+
+        - "\\$username"
+
+        - "\\$password"
+
+        - "\\$remember"
+
+      sink_patterns:
+
+        - "verifyPassword\\s*\\("
+
+        - "authenticate\\s*\\("
+
+        - "setUserVar\\s*\\("
+
+        - "SessionManager"
+
+        - "login\\s*\\(\\s*\\$username\\s*,\\s*\\$password"
+
+      safe_patch_patterns:
+
+        - "Application::get\\(\\)->getRequest\\(\\)"
+
+        - "\\$request->checkCSRF\\s*\\("
+
+        - "if\\s*\\(\\s*!\\s*\\$request->checkCSRF\\s*\\(\\s*\\)\\s*\\)"
+
+        - "return\\s+false\\s*;\\s*//\\s*Failed\\s+CSRF\\s+check"
+
+      confidence_reason: >-
+
+        The Validation::login() function processes username and password based
+        authentication without a server-side CSRF validation guard. A vulnerable
+        implementation lacks Application::get()->getRequest() and
+        $request->checkCSRF() before password verification or session-related
+        authentication logic.

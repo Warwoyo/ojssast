@@ -39,8 +39,87 @@ def test_json_structure():
     assert data["summary"]["by_module"]["config"] == 1
     assert len(data["findings"]) == 3
     f = data["findings"][0]
-    for key in ("finding_id", "rule_id", "module", "severity", "file_path", "remediation"):
+    for key in (
+        "finding_id",
+        "rule_id",
+        "name",
+        "severity",
+        "category",
+        "file_path",
+        "line_start",
+        "description",
+        "remediation",
+        "cwe",
+        "owasp",
+        "cvss_score",
+        "references",
+        "code_snippet",
+        "confidence",
+        "ground_truth",
+        "evaluation_scope",
+        "rule_origin",
+        "rule_family",
+    ):
         assert key in f
+    assert f["name"] == "SQL injection"
+    assert f["description"] == "Tainted data reaches DB::raw."
+    assert f["line_start"] == 42
+    assert f["references"] == ["CVE-2025-67889"]
+    assert f["ground_truth"] is False
+    assert f["evaluation_scope"] == "generic"
+
+
+def test_internal_finding_to_dict_keeps_reporter_aliases():
+    data = Finding(
+        rule_id="CVE-SRC-001",
+        module="source_code",
+        severity=Severity.HIGH,
+        file_path="lib/pkp/classes/core/PKPRequest.php",
+        line=12,
+        title="Known CVE sink",
+        detail="Patch evidence is missing.",
+        remediation="Upgrade OJS.",
+        cwe="CWE-79",
+        owasp="A03:2021",
+        cvss_score=8.8,
+        cve_references=["CVE-2024-12345"],
+        code_snippet="echo $input;",
+        confidence="high",
+    ).to_dict()
+
+    for key in (
+        "finding_id",
+        "rule_id",
+        "name",
+        "severity",
+        "category",
+        "file_path",
+        "line_start",
+        "description",
+        "remediation",
+        "cwe",
+        "owasp",
+        "cvss_score",
+        "references",
+        "code_snippet",
+        "confidence",
+        "ground_truth",
+        "evaluation_scope",
+        "rule_origin",
+        "rule_family",
+    ):
+        assert key in data
+
+    assert data["title"] == "Known CVE sink"
+    assert data["name"] == "Known CVE sink"
+    assert data["detail"] == "Patch evidence is missing."
+    assert data["description"] == "Patch evidence is missing."
+    assert data["line"] == 12
+    assert data["line_start"] == 12
+    assert data["cve_references"] == ["CVE-2024-12345"]
+    assert data["references"] == ["CVE-2024-12345"]
+    assert data["ground_truth"] is True
+    assert data["evaluation_scope"] == "ground_truth"
 
 
 def test_json_written_to_disk(tmp_path):

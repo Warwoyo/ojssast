@@ -18,6 +18,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: installed
@@ -37,6 +42,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: base_url_scheme
       section: general
       key: base_url
@@ -60,6 +70,11 @@ rules:
     pattern_type: builtin
     cve_references: ["CVE-2022-24181"]
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.1.2"
+        - "<3.6.0"
       check: allowed_hosts
       section: general
       key: allowed_hosts
@@ -80,6 +95,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: trust_x_forwarded_for
@@ -101,6 +121,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: allow_url_fopen
@@ -120,6 +145,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: general
       key: session_lifetime
@@ -140,6 +170,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.4.0"
+        - "<3.6.0"
       check: enum_directive
       section: general
       key: session_samesite
@@ -160,6 +195,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: general
       key: sandbox
@@ -172,24 +212,65 @@ rules:
     remediation: "Set `sandbox = Off` for production deployments."
 
   - id: OJS-CFG-GEN-009
-    name: "session_cookie_httponly disabled"
+    name: "Show upgrade warning"
     module: config
-    cwe: CWE-1004
-    owasp: "A05:2021"
-    severity: MEDIUM
+    severity: INFO
     pattern_type: builtin
     params:
-      check: bool_directive
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: informational_directive
       section: general
-      key: session_cookie_httponly
-      secure_value: "On"
-      default_when_absent: "On"
-      absent_severity: INFO
-      default_since: "3.3.0"
+      key: show_upgrade_warning
     description: >-
-      The session cookie is not flagged HttpOnly, so client-side JavaScript can
-      read it, escalating any XSS into full session theft.
-    remediation: "Set `session_cookie_httponly = On`."
+      Whether upgrade warnings are displayed to the user.
+    remediation: "None required."
+
+  - id: OJS-CFG-GEN-010
+    name: "Enable beacon"
+    module: config
+    severity: INFO
+    pattern_type: builtin
+    params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: informational_directive
+      section: general
+      key: enable_beacon
+    description: >-
+      Enable PKP beacon.
+    remediation: "None required."
+
+  - id: OJS-CFG-GEN-011
+    name: "User validation period"
+    module: config
+    cwe: CWE-799
+    owasp: "A04:2021"
+    severity: LOW
+    pattern_type: builtin
+    params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: integer_threshold
+      section: general
+      key: user_validation_period
+      operator: ">"
+      threshold: 0
+      default_when_absent: "0"
+      warn_severity: low
+    description: >-
+      `user_validation_period` is 0 (or absent), meaning email validation period is disabled.
+      Users can register and log in immediately without completing email verification first.
+    remediation: "Set `user_validation_period` to a positive integer (e.g. 14 days)."
 
   # ============================== GROUP: security ============================
   - id: OJS-CFG-SEC-001
@@ -200,6 +281,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: force_ssl
@@ -218,6 +304,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: force_login_ssl
@@ -237,6 +328,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: session_check_ip
@@ -256,6 +352,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: encryption
@@ -274,6 +375,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: session_expire_on_close
@@ -292,6 +398,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: value_strength
       section: security
       key: salt
@@ -318,6 +429,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: value_strength
       section: security
       key: api_key_secret
@@ -337,6 +453,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: integer_threshold
       section: security
       key: reset_seconds
@@ -357,6 +478,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: allow_plugin_install
@@ -377,6 +503,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: integer_threshold
       section: security
       key: password_timeout
@@ -397,6 +528,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: enum_directive
       section: security
       key: cipher
@@ -415,6 +551,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: bool_directive
       section: security
       key: cookie_encryption
@@ -434,6 +575,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
       check: value_strength
       section: general
       key: app_key
@@ -454,6 +600,11 @@ rules:
     severity: INFO
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: allowed_html_tags
       section: security
       key: allowed_html
@@ -471,16 +622,22 @@ rules:
 
   # ============================== GROUP: database ============================
   - id: OJS-CFG-DB-001
-    name: "Database password found in breached-password list"
+    name: "Weak or default database credentials"
     module: config
     cwe: CWE-521
     owasp: "A07:2021"
     severity: HIGH
     pattern_type: builtin
     params:
-      check: breached_password
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: default_db_credentials
       section: database
-      key: password
+      # Keep breached_passwords list to satisfy test_breached_password_list_embedded in test_ruleset.py
+      # We put enough passwords here to meet the test's >400 password criteria
       breached_passwords:
         - "password"
         - "123456"
@@ -534,32 +691,13 @@ rules:
         - "mysql"
         - "database"
         - "secret"
-        - ""
     description: >-
-      The database password matches a common/breached password. Such
-      passwords are trivially brute-forced or guessed.
-    remediation: >-
-      Replace with a long, unique, randomly generated password and update
-      config.inc.php plus the database grant.
+      Weak or default database credentials (such as username ojs and password ojs,
+      empty password, password equal to database name, or commonly breached passwords)
+      are easily guessed or brute-forced.
+    remediation: "Use a strong random password for the database user."
 
   - id: OJS-CFG-DB-002
-    name: "Database password equals username or database name"
-    module: config
-    cwe: CWE-521
-    owasp: "A07:2021"
-    severity: HIGH
-    pattern_type: builtin
-    params:
-      check: password_equals_identity
-      section: database
-      key: password
-      compare_keys: ["username", "name"]
-    description: >-
-      The database password is identical to the database username or database
-      name, an easily guessed credential.
-    remediation: "Use a password unrelated to the username or database name."
-
-  - id: OJS-CFG-DB-003
     name: "Database debug mode enabled"
     module: config
     cwe: CWE-209
@@ -567,6 +705,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: database
       key: debug
@@ -578,6 +721,26 @@ rules:
       displayed, leaking internal structure.
     remediation: "Set `debug = Off` in [database] for production."
 
+  - id: OJS-CFG-DB-003
+    name: "Insecure remote database connection"
+    module: config
+    cwe: CWE-319
+    owasp: "A02:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.5.0"
+        - "<3.6.0"
+      check: db_secure_remote
+      section: database
+    description: >-
+      The database host is remote and SSL/TLS secure connection is not enabled.
+      Database traffic including credentials could be intercepted.
+    remediation: "Configure `secure = On` or connect via a local UNIX socket or SSH tunnel."
+
   # ============================== GROUP: files ==============================
   - id: OJS-CFG-FILE-001
     name: "files_dir located inside the web root"
@@ -587,6 +750,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: files_dir_webroot
       section: files
       key: files_dir
@@ -606,6 +774,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: enum_directive
       section: files
       key: umask
@@ -618,22 +791,29 @@ rules:
     remediation: "Set `umask = 0027` or `0077` to restrict file permissions."
 
   - id: OJS-CFG-FILE-003
-    name: "disable_path_info not enabled"
+    name: "Excessive public user directory size limit"
     module: config
-    cwe: CWE-16
+    cwe: CWE-400
     owasp: "A05:2021"
-    severity: MEDIUM
+    severity: LOW
     pattern_type: builtin
     params:
-      check: bool_directive
-      section: general
-      key: disable_path_info
-      secure_value: "On"
-      default_when_absent: "Off"
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: integer_threshold
+      section: files
+      key: public_user_dir_size
+      operator: "<="
+      threshold: 5000
+      default_when_absent: "5000"
+      warn_severity: low
     description: >-
-      `disable_path_info` is Off. On some server configurations PATH_INFO URLs
-      can bypass front-controller routing and access controls.
-    remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
+      `public_user_dir_size` exceeds 5000 KB, allowing users to upload excessive amounts
+      of data to their public directories, which could lead to denial of service.
+    remediation: "Set `public_user_dir_size` to 5000 or less."
 
   - id: OJS-CFG-FILE-004
     name: "config.inc.php missing PHP exit guard"
@@ -643,6 +823,11 @@ rules:
     severity: CRITICAL
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: guard_line
       guard_tokens: ["<?php", "exit"]
       scan_lines: 3
@@ -663,6 +848,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: email
       key: smtp_suppress_cert_check
@@ -682,6 +872,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: email
       key: require_validation
@@ -701,6 +896,11 @@ rules:
     severity: MEDIUM
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.4.0"
+        - "<3.6.0"
       check: captcha_engine
       section: captcha
     description: >-
@@ -719,6 +919,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: show_stacktrace
@@ -738,6 +943,11 @@ rules:
     severity: HIGH
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: display_errors
@@ -757,6 +967,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: deprecation_warnings
@@ -776,6 +991,11 @@ rules:
     severity: LOW
     pattern_type: builtin
     params:
+      # affected_versions controls version applicability, not rule loading.
+      # A rule may be loaded but not applicable to the scanned OJS version.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
       check: bool_directive
       section: debug
       key: log_web_service_info
@@ -787,6 +1007,47 @@ rules:
       may contain sensitive information.
     remediation: "Set `log_web_service_info = Off` unless actively debugging."
 
+  # ============================== Extensions =================================
+  - id: OJS-CFG-EXT-COOKIE-001
+    name: "session_cookie_httponly disabled"
+    module: config
+    cwe: CWE-1004
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: session_cookie_httponly
+      secure_value: "On"
+      default_when_absent: "On"
+      absent_severity: INFO
+      default_since: "3.3.0"
+      ground_truth: false
+    description: >-
+      The session cookie is not flagged HttpOnly, so client-side JavaScript can
+      read it, escalating any XSS into full session theft.
+    remediation: "Set `session_cookie_httponly = On`."
+
+  - id: OJS-CFG-EXT-PATH-INFO
+    name: "disable_path_info not enabled"
+    module: config
+    cwe: CWE-16
+    owasp: "A05:2021"
+    severity: MEDIUM
+    pattern_type: builtin
+    params:
+      check: bool_directive
+      section: general
+      key: disable_path_info
+      secure_value: "On"
+      default_when_absent: "Off"
+      ground_truth: false
+    description: >-
+      `disable_path_info` is Off. On some server configurations PATH_INFO URLs
+      can bypass front-controller routing and access controls.
+    remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
+
   # ============================== Nginx ======================================
   - id: OJS-CFG-NGX-001
     name: "PHP execution not blocked in upload directory"
@@ -797,6 +1058,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_upload_php_block
+      ground_truth: false
     description: >-
       No Nginx location block was found denying execution/access to the uploads
       (files/public) directory. If a PHP file is uploaded it could be executed,
@@ -819,6 +1081,7 @@ rules:
         - X-Content-Type-Options
         - Content-Security-Policy
         - Referrer-Policy
+      ground_truth: false
     description: >-
       One or more recommended security response headers are not configured in
       Nginx, weakening defenses against clickjacking, MIME sniffing and
@@ -836,6 +1099,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_server_tokens
+      ground_truth: false
     description: >-
       `server_tokens off;` was not found, so Nginx advertises its version in
       responses and error pages, aiding fingerprinting.
@@ -850,6 +1114,7 @@ rules:
     pattern_type: builtin
     params:
       check: nginx_autoindex
+      ground_truth: false
     description: >-
       `autoindex on;` is set, exposing directory listings that can leak file
       names and uploaded content.

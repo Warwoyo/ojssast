@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from ojs_sast.models import Severity
+from ojs_sast.models import Severity, resolve_rule_metadata
 
 
 class Category(Enum):
@@ -71,8 +71,33 @@ class Finding:
     taint_path: Optional[TaintPath] = None
     confidence: str = "medium"
     cvss_score: Optional[float] = None
+    ground_truth: Optional[bool] = None
+    evaluation_scope: Optional[str] = None
+    rule_origin: Optional[str] = None
+    rule_family: Optional[str] = None
+    applicable: Optional[bool] = None
+    applicability_reason: Optional[str] = None
+    # CVE-specific evidence carried through from the CVE scanner so the reporters
+    # and HTML template can present the structured detection rationale.
+    matched_source: Optional[str] = None
+    matched_sink: Optional[str] = None
+    missing_patch_evidence: Optional[str] = None
+    safe_patch_checked: Optional[List[str]] = None
+    affected_version_reasoning: Optional[str] = None
+    confidence_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        metadata = resolve_rule_metadata(self.rule_id)
+        ground_truth = (
+            self.ground_truth if self.ground_truth is not None else metadata["ground_truth"]
+        )
+        evaluation_scope = (
+            self.evaluation_scope
+            if self.evaluation_scope is not None
+            else metadata["evaluation_scope"]
+        )
+        rule_origin = self.rule_origin if self.rule_origin is not None else metadata["rule_origin"]
+        rule_family = self.rule_family if self.rule_family is not None else metadata["rule_family"]
         return {
             "finding_id": f"{self.rule_id}:{self.file_path}:{self.line_start}",
             "rule_id": self.rule_id,
@@ -90,6 +115,19 @@ class Finding:
             "cvss_score": self.cvss_score,
             "references": list(self.references),
             "code_snippet": self.code_snippet,
+            "ground_truth": ground_truth,
+            "evaluation_scope": evaluation_scope,
+            "rule_origin": rule_origin,
+            "rule_family": rule_family,
+            "applicable": self.applicable,
+            "applicability_reason": self.applicability_reason,
             "confidence": self.confidence,
             "taint_path": self.taint_path.to_dict() if self.taint_path else None,
+            # CVE evidence (only present for CVE-scanner findings).
+            **({"matched_source": self.matched_source} if self.matched_source else {}),
+            **({"matched_sink": self.matched_sink} if self.matched_sink else {}),
+            **({"missing_patch_evidence": self.missing_patch_evidence} if self.missing_patch_evidence else {}),
+            **({"safe_patch_checked": self.safe_patch_checked} if self.safe_patch_checked else {}),
+            **({"affected_version_reasoning": self.affected_version_reasoning} if self.affected_version_reasoning else {}),
+            **({"confidence_reason": self.confidence_reason} if self.confidence_reason else {}),
         }

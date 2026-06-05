@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 from . import __version__
 from .detectors.config_scanner import (ConfigScanner, extract_upload_dirs,
                                         parse_config)
-from .detectors.source_scanner import SourceScanner
+from .detectors.cve_scanner import CVEScanner
 from .detectors.upload_scanner import UploadScanner
 from .models import Finding, ScanResult, Severity, sort_findings
 from .models.report import ScanReport
@@ -161,8 +161,8 @@ class Orchestrator:
 
         if "source_code" in modules:
             self._progress("Scanning source code…")
-            scanner = SourceScanner(self.ruleset, ojs_version=version,
-                                    verbose=self.verbose, progress_cb=self.progress_cb)
+            scanner = CVEScanner(self.ruleset, ojs_version=version,
+                                 verbose=self.verbose, progress_cb=self.progress_cb)
             findings.extend(scanner.scan(self.ojs_path))
             self.files_scanned["source_code"] = scanner.files_scanned
 

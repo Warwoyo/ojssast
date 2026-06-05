@@ -3,7 +3,38 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+
+@dataclass
+class PatternMatch:
+    pattern: str
+    start: int
+    end: int
+    line_start: int
+    line_end: int
+    snippet: str | None = None
+
+
+def find_pattern_span(
+    source: str,
+    pattern: str,
+    flags: int = re.IGNORECASE | re.MULTILINE | re.DOTALL,
+) -> Optional[PatternMatch]:
+    """Find the first regex match and return its span, line range, and snippet."""
+    match = re.search(pattern, source, flags)
+    if match is None:
+        return None
+
+    return PatternMatch(
+        pattern=pattern,
+        start=match.start(),
+        end=match.end(),
+        line_start=source.count("\n", 0, match.start()) + 1,
+        line_end=source.count("\n", 0, match.end()) + 1,
+        snippet=match.group(0).strip(),
+    )
 
 
 def extract_function_body(source: str, function_name: str) -> Optional[str]:
@@ -119,4 +150,72 @@ def find_all_pattern_lines(
     for i, line in enumerate(source.splitlines(), 1):
         if re.search(pattern, line, flags):
             results.append((i, line.strip()))
+    return results
+
+
+def find_all_pattern_spans(
+    source: str,
+    pattern: str,
+    flags: int = re.IGNORECASE | re.MULTILINE | re.DOTALL,
+) -> List[PatternMatch]:
+    """Find ALL regex matches and return their span, line range, and snippet."""
+    results: List[PatternMatch] = []
+    for match in re.finditer(pattern, source, flags):
+        results.append(PatternMatch(
+            pattern=pattern,
+            start=match.start(),
+            end=match.end(),
+            line_start=source.count("\n", 0, match.start()) + 1,
+            line_end=source.count("\n", 0, match.end()) + 1,
+            snippet=match.group(0).strip(),
+        ))
+    return results
+
+
+def find_request_variables(source: str, param_names: set) -> dict:
+    """Find PHP variables assigned from getUserVar() for given parameter names.
+
+    Returns {variable_name: line_number}.  Only the first assignment per variable
+    is recorded.  Supports the common OJS request patterns:
+      $var = $request->getUserVar('param')
+      $var = Request::getUserVar('param')
+      $var = $this->getRequest()->getUserVar('param')
+    """
+    results: dict = {}
+    for param in param_names:
+        pat = re.compile(
+            r"(\$\w+)\s*=\s*(?:[^;\n]*?)getUserVar\s*\(\s*['\"]"
+            + re.escape(param) + r"['\"]",
+            re.IGNORECASE,
+        )
+        for i, line in enumerate(source.splitlines(), 1):
+            m = pat.search(line)
+            if m:
+                varname = m.group(1)
+                if varname not in results:
+                    results[varname] = i
+    return results
+
+
+def find_unserialize_sinks(source: str, variables: set) -> List[PatternMatch]:
+    """Find unserialize() calls whose first argument is one of *variables*.
+
+    Detects:
+      unserialize($var)
+      @unserialize($var)
+      unserialize(base64_decode($var))
+    """
+    results: List[PatternMatch] = []
+    for var in variables:
+        var_esc = re.escape(var)
+        pat = rf"@?unserialize\s*\(\s*(?:base64_decode\s*\(\s*)?{var_esc}\b"
+        for m in re.finditer(pat, source, re.IGNORECASE):
+            results.append(PatternMatch(
+                pattern=pat,
+                start=m.start(),
+                end=m.end(),
+                line_start=source.count("\n", 0, m.start()) + 1,
+                line_end=source.count("\n", 0, m.end()) + 1,
+                snippet=source[m.start():m.end()].strip(),
+            ))
     return results
