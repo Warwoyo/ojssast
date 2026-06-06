@@ -59,6 +59,7 @@ class ScanBundle:
     detection_markers: List[str] = field(default_factory=list)
 
     # Provenance / audit (never secrets).
+    agent_id: Optional[str] = None
     agent_version: Optional[str] = None
     agent_hostname: Optional[str] = None
     bundle_id: Optional[str] = None
@@ -92,6 +93,7 @@ class ScanBundle:
             ojs_version=meta.get("ojs_version"),
             ojs_detected=bool(meta.get("ojs_detected", False)),
             detection_markers=list(meta.get("detection_markers") or []),
+            agent_id=meta.get("agent_id"),
             agent_version=meta.get("agent_version"),
             agent_hostname=meta.get("agent_hostname"),
             bundle_id=meta.get("bundle_id"),

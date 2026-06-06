@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+from ..models import Severity
 from ..models.bundle import ScanBundle, resolve_source_root
 from ..models.report import ScanReport
 from ..orchestrator import Orchestrator
@@ -90,6 +91,24 @@ class Worker:
 
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            scan_options = meta.get("scan_options") or {}
+            categories = scan_options.get("categories")
+            min_severity_raw = scan_options.get("min_severity", "INFO")
+            # formats is read for future use; all 3 formats are always generated.
+            valid_categories = {"source_code", "config", "upload_directory"}
+            if categories:
+                categories = [c for c in categories if c in valid_categories]
+
+            try:
+                min_severity = Severity.from_str(min_severity_raw)
+            except ValueError:
+                self.storage.update(scan_id, status="error", finished_at=_utcnow(),
+                                    error=f"invalid min_severity: {min_severity_raw!r}")
+                write_audit(self.config.audit_log_path,
+                            {"scan_id": scan_id, "status": "error",
+                             "error": "invalid_min_severity"})
+                return
+
             safe_extract_archive(
                 source, extracted,
                 max_files=self.config.max_files_per_archive,
@@ -99,7 +118,12 @@ class Worker:
             source_root = resolve_source_root(extracted, meta)
             bundle = ScanBundle.from_meta(meta, source_root)
 
-            orch = Orchestrator(source_root or extracted, ruleset=self.ruleset)
+            orch = Orchestrator(
+                source_root or extracted,
+                ruleset=self.ruleset,
+                min_severity=min_severity,
+                categories=categories or None,
+            )
             result = orch.run_bundle(bundle)
 
             result_path = job_dir / "result.json"
