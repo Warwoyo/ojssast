@@ -142,13 +142,40 @@ class ConfigScanner:
 
     def scan(self, config_path: Optional[Path],
              nginx_paths: Optional[List[Path]] = None) -> List[Finding]:
+        """Scan local config files: read them, then delegate to :meth:`scan_texts`."""
+        if config_path and Path(config_path).is_file():
+            config_text: Optional[str] = Path(config_path).read_text(
+                encoding="utf-8", errors="replace")
+            config_label = str(config_path)
+        else:
+            config_text = None
+            config_label = str(config_path)
+            logger.warning("config.inc.php not found at %s; skipping config checks", config_path)
+
+        nginx_texts = self._load_nginx(nginx_paths)
+        if not nginx_texts and nginx_paths:
+            logger.warning("No readable Nginx config found at provided path(s)")
+
+        findings = self.scan_texts(config_text, nginx_texts, config_label=config_label)
+        logger.info("Config scan complete: %d findings", len(findings))
+        return findings
+
+    def scan_texts(self, config_text: Optional[str],
+                   nginx_texts: Optional[List[Tuple[str, str]]] = None,
+                   *, config_label: str = "config.inc.php") -> List[Finding]:
+        """Evaluate config rules over raw text, with no filesystem access.
+
+        ``config_text`` is the raw ``config.inc.php`` contents (or ``None``).
+        ``nginx_texts`` is a list of ``(text, label)`` pairs for nginx-style
+        configs. This is the shared core used by both the local :meth:`scan` and
+        the remote :meth:`scan_payload`.
+        """
         findings: List[Finding] = []
         config_rules = [r for r in self.ruleset.by_module("config")]
 
-        if config_path and Path(config_path).is_file():
-            text = Path(config_path).read_text(encoding="utf-8", errors="replace")
-            sections = parse_config(text)
-            rel = str(config_path)
+        if config_text is not None:
+            sections = parse_config(config_text)
+            rel = config_label
             for rule in config_rules:
                 if rule.params.get("reporting") is False:
                     continue
@@ -167,26 +194,34 @@ class ConfigScanner:
 
                 check = rule.params.get("check")
                 if check and not check.startswith("nginx_"):
-                    f = self._run_check(rule, check, text, sections, rel)
+                    f = self._run_check(rule, check, config_text, sections, rel)
                     if f:
                         findings.extend(f)
-        else:
-            logger.warning("config.inc.php not found at %s; skipping config checks", config_path)
 
         # Nginx — process each file individually for accurate line numbers.
-        nginx_files = self._load_nginx(nginx_paths)
-        if nginx_files:
+        if nginx_texts:
             for rule in config_rules:
                 if rule.params.get("reporting") is False:
                     continue
                 check = rule.params.get("check", "")
                 if check.startswith("nginx_"):
-                    for nx_text, nx_label in nginx_files:
+                    for nx_text, nx_label in nginx_texts:
                         findings.extend(self._run_nginx_check(rule, check, nx_text, nx_label))
-        elif nginx_paths:
-            logger.warning("No readable Nginx config found at provided path(s)")
 
-        logger.info("Config scan complete: %d findings", len(findings))
+        return findings
+
+    def scan_payload(self, config_files: Dict[str, str]) -> List[Finding]:
+        """Evaluate config rules over a raw-text payload (remote / agent mode).
+
+        ``config_files`` maps logical names to raw text. ``"config.inc.php"`` is
+        routed to the INI checks; every other entry (e.g. ``"nginx/site.conf"``)
+        is treated as an nginx-style config and run through the nginx checks.
+        """
+        config_text = config_files.get("config.inc.php")
+        nginx_texts = [(text, name) for name, text in config_files.items()
+                       if name != "config.inc.php"]
+        findings = self.scan_texts(config_text, nginx_texts, config_label="config.inc.php")
+        logger.info("Config payload scan complete: %d findings", len(findings))
         return findings
 
     # -- config.inc.php checks --------------------------------------------- #

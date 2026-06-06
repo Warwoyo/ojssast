@@ -18,8 +18,10 @@ from . import __version__
 from .detectors.config_scanner import (ConfigScanner, extract_upload_dirs,
                                         parse_config)
 from .detectors.cve_scanner import CVEScanner
+from .detectors.upload_manifest_scanner import UploadManifestScanner
 from .detectors.upload_scanner import UploadScanner
 from .models import Finding, ScanResult, Severity, sort_findings
+from .models.bundle import ScanBundle
 from .models.report import ScanReport
 from .reporters import (generate_html_report, generate_json_report,
                         generate_sarif_report)
@@ -139,11 +141,21 @@ class Orchestrator:
 
     # ------------------------------------------------------------------ #
     def run(self) -> ScanResult:
+        """Run a local scan of ``self.ojs_path`` (the original behavior)."""
+        return self.run_local()
+
+    def run_local(self, ojs_path: Optional[Path] = None) -> ScanResult:
+        """Scan an OJS install directly on the local filesystem.
+
+        ``ojs_path`` defaults to ``self.ojs_path``; this is the unchanged
+        single-host behavior, now expressed as one of two entry points.
+        """
         start = time.time()
-        info = detect_ojs(self.ojs_path)
+        target = Path(ojs_path) if ojs_path is not None else self.ojs_path
+        info = detect_ojs(target)
         version = self.forced_version or info.version
         if info.is_ojs:
-            self._progress(f"Detected OJS at {self.ojs_path} (version {version or 'unknown'})")
+            self._progress(f"Detected OJS at {target} (version {version or 'unknown'})")
         else:
             logger.warning(
                 "Path does not look like a complete OJS install (markers: %s). Continuing anyway.",
@@ -163,12 +175,12 @@ class Orchestrator:
             self._progress("Scanning source code…")
             scanner = CVEScanner(self.ruleset, ojs_version=version,
                                  verbose=self.verbose, progress_cb=self.progress_cb)
-            findings.extend(scanner.scan(self.ojs_path))
+            findings.extend(scanner.scan(target))
             self.files_scanned["source_code"] = scanner.files_scanned
 
         if "config" in modules:
             self._progress("Scanning configuration…")
-            cfg_scanner = ConfigScanner(self.ruleset, ojs_path=self.ojs_path,
+            cfg_scanner = ConfigScanner(self.ruleset, ojs_path=target,
                                         ojs_version=version, verbose=self.verbose)
             findings.extend(cfg_scanner.scan(info.config_path, self._resolve_nginx_paths()))
 
@@ -184,16 +196,109 @@ class Orchestrator:
                 logger.warning("No upload directories resolved; skipping upload scan.")
                 self._progress("No upload directories found; skipping upload scan.")
 
+        return self._finalize(
+            findings, modules, version, start,
+            ojs_detected=info.is_ojs,
+            detection_markers=info.markers,
+            ojs_path_label=str(target),
+            extra_metadata={"scan_mode": "local"},
+        )
+
+    def run_bundle(self, bundle: ScanBundle) -> ScanResult:
+        """Scan an agent-supplied bundle (extracted source + config payload +
+        upload manifest) instead of a live filesystem.
+
+        The source archive must already be safely extracted into
+        ``bundle.source_root`` by the caller. OJS version / detection facts are
+        taken from the bundle (computed agent-side on the full install).
+        """
+        start = time.time()
+        version = self.forced_version or bundle.ojs_version
+        if bundle.ojs_detected:
+            self._progress(f"Scanning bundle (OJS version {version or 'unknown'})")
+        else:
+            self._progress("Scanning bundle (target not confirmed as OJS; continuing).")
+
+        modules = self._modules_to_run()
+        logger.info("Modules to run (bundle): %s", ", ".join(modules))
+        self._progress(f"Loaded {len(self.ruleset)} rules "
+                       f"({self.ruleset.counts_by_module()})")
+
+        findings: List[Finding] = []
+
+        if "source_code" in modules and bundle.source_root is not None:
+            self._progress("Scanning source snapshot…")
+            scanner = CVEScanner(self.ruleset, ojs_version=version,
+                                 verbose=self.verbose, progress_cb=self.progress_cb)
+            findings.extend(scanner.scan(bundle.source_root))
+            self.files_scanned["source_code"] = scanner.files_scanned
+
+        if "config" in modules and bundle.config_files:
+            self._progress("Scanning configuration payload…")
+            cfg_scanner = ConfigScanner(self.ruleset, ojs_path=None,
+                                        ojs_version=version, verbose=self.verbose)
+            findings.extend(cfg_scanner.scan_payload(bundle.config_files))
+            self.files_scanned["config"] = len(bundle.config_files)
+
+        if "upload_directory" in modules and bundle.upload_manifest is not None:
+            self._progress(f"Scanning {len(bundle.upload_manifest)} manifest entry(ies)…")
+            up_scanner = UploadManifestScanner(self.ruleset, verbose=self.verbose,
+                                               progress_cb=self.progress_cb)
+            findings.extend(up_scanner.scan(bundle.upload_manifest))
+            self.files_scanned["upload_directory"] = up_scanner.files_scanned
+
+        entries = bundle.upload_manifest or []
+        upload_total = sum(int(e.get("size", 0) or 0)
+                           for e in entries if isinstance(e, dict))
+
+        return self._finalize(
+            findings, modules, version, start,
+            ojs_detected=bundle.ojs_detected,
+            detection_markers=bundle.detection_markers,
+            ojs_path_label=bundle.source_label or "remote-bundle",
+            extra_metadata={
+                "scan_mode": "remote",
+                "agent_version": bundle.agent_version,
+                "agent_hostname": bundle.agent_hostname,
+                "bundle_id": bundle.bundle_id,
+                "config_payload_mode": "raw_text",
+                "source_archive_sha256": bundle.source_archive_sha256,
+                "source_archive_bytes": bundle.source_archive_bytes,
+                "upload_manifest_entries": len(entries),
+                "upload_total_size_bytes": upload_total,
+                "bundle_created_at": bundle.created_at,
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    def _finalize(
+        self,
+        findings: List[Finding],
+        modules: List[str],
+        version: Optional[str],
+        start: float,
+        *,
+        ojs_detected: bool,
+        detection_markers: List[str],
+        ojs_path_label: str,
+        extra_metadata: Optional[Dict[str, object]] = None,
+    ) -> ScanResult:
+        """Deduplicate, severity-filter, assemble metadata and build the result.
+
+        Shared by ``run_local`` and ``run_bundle`` so both produce the identical
+        13 base metadata keys. ``extra_metadata`` is applied additively and must
+        never overwrite an existing key.
+        """
         deduped = self._deduplicate(findings)
         filtered = [f for f in deduped if f.severity.rank >= self.min_severity.rank]
 
         metadata = {
             "tool": "ojs-sast",
             "version": __version__,
-            "ojs_path": str(self.ojs_path),
+            "ojs_path": ojs_path_label,
             "ojs_version": version or "unknown",
-            "ojs_detected": info.is_ojs,
-            "detection_markers": info.markers,
+            "ojs_detected": ojs_detected,
+            "detection_markers": detection_markers,
             "scan_timestamp": datetime.now(timezone.utc).isoformat(),
             "modules_run": modules,
             "rules_loaded": len(self.ruleset),
@@ -203,6 +308,11 @@ class Orchestrator:
             "findings_before_dedup": len(findings),
             "findings_after_dedup": len(deduped),
         }
+        if extra_metadata:
+            for key, value in extra_metadata.items():
+                if key not in metadata:  # additive only; never clobber a base key
+                    metadata[key] = value
+
         result = ScanResult(metadata=metadata, findings=filtered)
         logger.info("Scan finished in %.2fs: %d findings (%d before dedup)",
                     metadata["duration_seconds"], len(filtered), len(findings))

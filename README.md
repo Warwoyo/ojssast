@@ -202,13 +202,16 @@ Point the tool at it with `--ruleset-dir /path/to/rules`.
 
 ```
 ojs_sast/
-├── cli.py                 # Click CLI (scan / list-rules / version)
-├── orchestrator.py        # detection, scheduling, dedup, reporting
-├── models.py              # Severity, Rule, RuleMatch, Finding, ScanResult
+├── cli.py                 # Click CLI (scan / scan-bundle / list-rules / version)
+├── orchestrator.py        # detection, scheduling, dedup, reporting; run_local + run_bundle
+├── models/                # Severity, Rule, RuleMatch, Finding, ScanResult, ScanBundle
 ├── detectors/
 │   ├── source_scanner.py  # PHP taint + regex + Smarty + JS + CSRF
-│   ├── config_scanner.py  # config.inc.php + Nginx
-│   └── upload_scanner.py  # 5-layer upload scanner
+│   ├── config_scanner.py  # config.inc.php + Nginx (scan / scan_payload / scan_texts)
+│   ├── upload_scanner.py  # 5-layer upload scanner (local files)
+│   └── upload_manifest_scanner.py  # same 5 layers over an agent manifest
+├── agent/                 # OJS-node agent: snapshot, config collector, manifest, client, CLI
+├── service/               # SAST service: FastAPI app, auth, storage, queue, worker, sandbox
 ├── ruleset/
 │   ├── loader.py
 │   ├── source_rules.yaml
@@ -222,13 +225,17 @@ ojs_sast/
 ## Testing
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]"            # core suite
+pip install -e ".[test-service]"   # also runs the FastAPI service tests
 pytest -q
 ```
 
 The suite covers taint analysis, pattern matching, the five upload layers,
-config (insecure vs. hardened), report generation, and an end-to-end
-orchestrator run against a mock OJS tree.
+config (insecure vs. hardened), report generation, an end-to-end orchestrator
+run against a mock OJS tree, plus the agentic path: bundle round-trip and
+local↔remote parity, `scan_payload`, the upload-manifest scanner/builder,
+sandboxed archive extraction, and a FastAPI service integration test. The
+service tests skip automatically when the `service` extra is not installed.
 
 ---
 
