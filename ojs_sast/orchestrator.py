@@ -248,8 +248,10 @@ class Orchestrator:
             self.files_scanned["upload_directory"] = up_scanner.files_scanned
 
         entries = bundle.upload_manifest or []
-        upload_total = sum(int(e.get("size", 0) or 0)
-                           for e in entries if isinstance(e, dict))
+        upload_total = sum(
+            int(e.get("size_bytes") or e.get("size") or 0)
+            for e in entries if isinstance(e, dict)
+        )
 
         return self._finalize(
             findings, modules, version, start,
@@ -258,6 +260,7 @@ class Orchestrator:
             ojs_path_label=bundle.source_label or "remote-bundle",
             extra_metadata={
                 "scan_mode": "remote",
+                "agent_id": bundle.agent_id,
                 "agent_version": bundle.agent_version,
                 "agent_hostname": bundle.agent_hostname,
                 "bundle_id": bundle.bundle_id,

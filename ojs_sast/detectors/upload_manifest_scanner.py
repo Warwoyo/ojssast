@@ -102,8 +102,24 @@ def load_upload_layer_params(ruleset: Ruleset) -> UploadLayerParams:
     )
 
 
+def _head_bytes(entry: dict) -> bytes:
+    """Decode ``head_hex`` from a manifest entry into raw bytes (empty on error)."""
+    raw = entry.get("head_hex") or ""
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        return b""
+
+
 class UploadManifestScanner:
-    """Scan upload *manifest entries* and emit upload-directory findings."""
+    """Scan upload *manifest entries* and emit upload-directory findings.
+
+    Webshell signatures (layer 4) and PDF active-content markers (layer 5)
+    are computed from the ``head_hex`` field in each entry — raw bytes from
+    the file's header, encoded as a hex string by the agent. The scanner does
+    NOT read pre-computed ``webshell_signature_matches`` or ``pdf_active_markers``
+    fields; those are ignored if present for backward compatibility.
+    """
 
     def __init__(self, ruleset: Ruleset, verbose: bool = False,
                  progress_cb: Optional[Callable[[str], None]] = None):
@@ -125,6 +141,9 @@ class UploadManifestScanner:
         self.php_mimes = params.php_mimes
         self.exec_mimes = params.exec_mimes
         self.expected_mime = params.expected_mime
+        # Webshell signature patterns and PDF keyword tokens (used in layers 4/5).
+        self.signatures = params.signatures
+        self.pdf_keywords = params.pdf_keywords
 
     # ----------------------------------------------------------------- #
     def _progress(self, msg: str) -> None:
@@ -155,16 +174,21 @@ class UploadManifestScanner:
             l3 = self._layer_mime_mismatch(rel, ext, mime)
             findings.extend(l3)
 
-            # Layer 4: webshell signatures (gated — mirrors UploadScanner._scan_file).
+            # Layer 4: webshell signatures from head_hex bytes (gated).
             gate = bool(l1) or bool(l3) or (mime in self.php_mimes) or (mime in ("text/plain",))
-            matches = entry.get("webshell_signature_matches") or []
-            if gate and matches:
-                findings.extend(self._emit_webshell(rel, ext, mime, matches))
+            if gate:
+                head = _head_bytes(entry)
+                findings.extend(self._layer_webshell_from_head(rel, ext, mime, head))
 
-            # Layer 5: malicious PDF
-            markers = entry.get("pdf_active_markers") or []
-            if (ext == ".pdf" or mime == "application/pdf") and markers:
-                findings.extend(self._emit_pdf(rel, ext, mime, markers))
+            # Layer 5: malicious PDF active-content markers from head_hex bytes.
+            # Supports optional "pdf_sample_hex" for a larger PDF sample window.
+            if ext == ".pdf" or mime == "application/pdf":
+                raw_hex = entry.get("pdf_sample_hex") or entry.get("head_hex") or ""
+                try:
+                    pdf_head = bytes.fromhex(raw_hex)
+                except ValueError:
+                    pdf_head = b""
+                findings.extend(self._layer_pdf_from_head(rel, ext, mime, pdf_head))
 
         logger.info("Upload manifest scan complete: %d entries, %d findings",
                     self.files_scanned, len(findings))
@@ -246,15 +270,30 @@ class UploadManifestScanner:
                              f"'{mime}'.", Severity.MEDIUM, mime, ext)]
         return []
 
-    # -- Evidence elevation (agent already matched signatures / markers) --- #
-    def _emit_webshell(self, rel, ext, mime, matches: List[str]) -> List[Finding]:
-        shown = list(matches)[:5]
+    # -- Layers 4 & 5: detection from head_hex bytes (computed service-side) -- #
+    def _layer_webshell_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
+        """Match compiled webshell signature patterns against the head bytes."""
+        text = head.decode("utf-8", "replace")
+        matches = []
+        for _sig_id, pattern, detail in self.signatures:
+            if pattern.search(text):
+                matches.append(detail or _sig_id)
+        if not matches:
+            return []
+        shown = matches[:5]
         more = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
         return [self._mk(self.r_shell, rel, "webshell_signature",
                          f"PHP webshell signature(s) detected: {'; '.join(shown)}{more}.",
                          Severity.CRITICAL, mime, ext, fallback_cwe="CWE-94")]
 
-    def _emit_pdf(self, rel, ext, mime, markers: List[str]) -> List[Finding]:
+    def _layer_pdf_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
+        """Scan head bytes for PDF active-content keyword tokens."""
+        found = []
+        for token, detail in self.pdf_keywords:
+            if token.encode("latin-1", "ignore") in head:
+                found.append(detail or token)
+        if not found:
+            return []
         return [self._mk(self.r_pdf, rel, "pdf_payload",
-                         f"PDF contains active-content markers: {'; '.join(markers)}.",
+                         f"PDF contains active-content markers: {'; '.join(found)}.",
                          Severity.HIGH, mime, ".pdf", fallback_cwe="CWE-434")]
