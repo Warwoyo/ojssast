@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,8 +17,10 @@ from rich.table import Table
 
 from . import __version__
 from .models import SEVERITY_ORDER, ScanResult, Severity
+from .models.bundle import ScanBundle, resolve_source_root
 from .orchestrator import Orchestrator
 from .ruleset.loader import RulesetError, load_ruleset
+from .service.extract import UnsafeArchiveError, safe_extract_archive
 
 console = Console()
 
@@ -131,6 +135,99 @@ def scan(ojs_path: Path, output_dir: Path, fmt: str, min_severity: str,
         if verbose:
             console.print_exception()
         sys.exit(1)
+
+    _print_summary(result)
+    console.print()
+    for fmt_name, path in written.items():
+        console.print(f"  [green]✓[/] {fmt_name.upper()} report: [cyan]{path}[/]")
+
+
+@cli.command(name="scan-bundle")
+@click.option("--source", "source", required=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Path to the agent source.tar.gz.")
+@click.option("--meta", "meta_path", required=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Path to the agent meta.json.")
+@click.option("--output-dir", type=click.Path(path_type=Path), default=Path("./ojs_sast_report"),
+              show_default=True, help="Where to write reports.")
+@click.option("--format", "fmt", default="json,html", show_default=True,
+              help="Report formats (comma-separated): json,html,sarif.")
+@click.option("--severity", "min_severity", default="INFO", show_default=True,
+              type=click.Choice([s.value for s in SEVERITY_ORDER], case_sensitive=False),
+              help="Minimum severity to report.")
+@click.option("--category", default=None,
+              help="Limit to categories (comma-separated): source_code,config,upload_directory.")
+@click.option("--ruleset-dir", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Custom ruleset directory.")
+@click.option("--ojs-version", default=None, help="Force OJS version (overrides meta.json).")
+@click.option("--verbose", is_flag=True, help="Show detailed progress.")
+def scan_bundle(source: Path, meta_path: Path, output_dir: Path, fmt: str,
+                min_severity: str, category: Optional[str], ruleset_dir: Optional[Path],
+                ojs_version: Optional[str], verbose: bool) -> None:
+    """Scan a local agent bundle (SOURCE tar.gz + META json) without a service."""
+    _setup_logging(verbose)
+
+    categories = _parse_csv(category)
+    invalid = [c for c in categories if c not in _VALID_CATEGORIES]
+    if invalid:
+        console.print(f"[bold red]Error:[/] invalid category/categories: {', '.join(invalid)}")
+        sys.exit(2)
+
+    formats = _parse_csv(fmt)
+    bad_fmt = [f for f in formats if f not in {"json", "html", "sarif"}]
+    if bad_fmt:
+        console.print(f"[bold red]Error:[/] invalid format(s): {', '.join(bad_fmt)}")
+        sys.exit(2)
+
+    try:
+        meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[bold red]Error:[/] cannot read meta.json: {exc}")
+        sys.exit(2)
+
+    console.print(Panel.fit(
+        f"[bold]ojs-sast[/] v{__version__}\nBundle: [cyan]{source}[/]",
+        border_style="blue"))
+
+    def progress(msg: str) -> None:
+        console.print(f"  [dim]›[/] {msg}")
+
+    result: Optional[ScanResult] = None
+    written: dict = {}
+    with tempfile.TemporaryDirectory(prefix="ojs-sast-bundle-") as tmp:
+        extract_dir = Path(tmp) / "extracted"
+        try:
+            safe_extract_archive(source, extract_dir)
+        except (UnsafeArchiveError, OSError) as exc:
+            console.print(f"[bold red]Unsafe or unreadable archive:[/] {exc}")
+            sys.exit(2)
+
+        source_root = resolve_source_root(extract_dir, meta)
+        bundle = ScanBundle.from_meta(meta, source_root)
+
+        try:
+            orch = Orchestrator(
+                source_root or extract_dir,
+                ruleset_dir=ruleset_dir,
+                output_dir=output_dir,
+                formats=formats or ["json"],
+                min_severity=Severity.from_str(min_severity),
+                categories=categories or None,
+                ojs_version=ojs_version,
+                verbose=verbose,
+                progress_cb=progress,
+            )
+            result = orch.run_bundle(bundle)
+            written = orch.generate_reports(result)
+        except RulesetError as exc:
+            console.print(f"[bold red]Ruleset error:[/] {exc}")
+            sys.exit(2)
+        except Exception as exc:  # pragma: no cover - top-level guard
+            console.print(f"[bold red]Scan failed:[/] {exc}")
+            if verbose:
+                console.print_exception()
+            sys.exit(1)
 
     _print_summary(result)
     console.print()
