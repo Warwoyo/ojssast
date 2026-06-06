@@ -27,8 +27,6 @@ dev = ["pytest>=7.0"]
 # Run the analysis service (FastAPI). python-multipart is required for the
 # multipart /scan upload endpoint.
 service = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
-# Submit bundles from the agent to a remote service.
-agent = ["httpx>=0.27"]
 # Everything needed to run the full test suite, including the service tests.
 test-service = [
     "pytest>=7.0",
@@ -40,7 +38,6 @@ test-service = [
 
 [project.scripts]
 ojs-sast = "ojs_sast.cli:cli"
-ojs-agent = "ojs_sast.agent.cli:cli"
 ojs-sast-service = "ojs_sast.service.cli:cli"
 
 [tool.setuptools]
@@ -52,7 +49,6 @@ packages = [
     "ojs_sast.ruleset",
     "ojs_sast.reporters",
     "ojs_sast.utils",
-    "ojs_sast.agent",
     "ojs_sast.service",
 ]
 

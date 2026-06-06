@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+from ..models import Severity
 from ..models.bundle import ScanBundle, resolve_source_root
 from ..models.report import ScanReport
 from ..orchestrator import Orchestrator
@@ -99,7 +100,29 @@ class Worker:
             source_root = resolve_source_root(extracted, meta)
             bundle = ScanBundle.from_meta(meta, source_root)
 
-            orch = Orchestrator(source_root or extracted, ruleset=self.ruleset)
+            # Honour scan_options from meta.json.
+            scan_options = meta.get("scan_options") or {}
+
+            min_severity_raw = scan_options.get("min_severity", "INFO")
+            try:
+                min_severity = Severity.from_str(min_severity_raw)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid min_severity in meta.json: {min_severity_raw!r}")
+
+            categories = scan_options.get("categories")
+            valid_categories = {"source_code", "config", "upload_directory"}
+            if categories is not None:
+                categories = [c for c in categories if c in valid_categories]
+                if not categories:
+                    categories = None
+
+            orch = Orchestrator(
+                source_root or extracted,
+                ruleset=self.ruleset,
+                min_severity=min_severity,
+                categories=categories,
+            )
             result = orch.run_bundle(bundle)
 
             result_path = job_dir / "result.json"

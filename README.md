@@ -1,16 +1,35 @@
-# ojs-sast
+# ojs-sast — SAST Service & Core
 
-**An OJS-aware Extended Static Application Security Testing (SAST) CLI for
+**An OJS-aware Extended Static Application Security Testing (SAST) service and
+core library for
 [Open Journal Systems](https://pkp.sfu.ca/software/ojs/) deployments.**
 
-`ojs-sast` understands OJS-specific code patterns (PKP request abstractions,
-Smarty templates, NativeXML import filenames), the `config.inc.php` structure,
-and the upload-directory layout. It combines **data-flow taint analysis**,
-**ruleset-driven pattern matching**, **configuration hardening checks**, and a
-**layered upload-directory scanner** into a single tool, and emits JSON, HTML
-and SARIF reports.
+> **This repository is the OJS-SAST service/core repository.**
+> Install this **only** on the SAST service node (VPS 1).
+>
+> **Do not install this repository on the OJS target node** if the goal is to
+> keep the SAST core, ruleset, and detectors off the target machine.
+>
+> For the OJS node (VPS 2), install the thin agent:
+> [`Warwoyo/ojs-sast-agent`](https://github.com/Warwoyo/ojs-sast-agent)
 
-> Built as a research tool for a thesis on OJS application security.
+---
+
+## Architecture
+
+```text
+VPS 1 — SAST Service Node
+  Repository: Warwoyo/ojssast (this repo)
+  Receives bundles from the agent, validates API keys,
+  safely extracts source.tar.gz, runs Orchestrator.run_bundle(),
+  matches ruleset, runs detectors, generates reports.
+
+VPS 2 — OJS Target Node
+  Repository: Warwoyo/ojs-sast-agent (separate repo)
+  Thin collector: builds source.tar.gz + meta.json,
+  submits to the service, polls for results, downloads reports.
+  Does NOT contain SAST core, ruleset, or detector code.
+```
 
 ---
 
@@ -37,8 +56,11 @@ Requires **Python 3.10+** and the system **libmagic** library (for
 # Debian/Ubuntu: system dependency for MIME detection
 sudo apt-get install -y libmagic1
 
-# Install the tool (editable for development)
+# Install the core tool
 pip install -e .
+
+# Install with the SAST service (FastAPI)
+pip install -e '.[service]'
 ```
 
 Python dependencies (installed automatically): `click`, `tree-sitter==0.21.3`,
@@ -51,10 +73,51 @@ Python dependencies (installed automatically): `click`, `tree-sitter==0.21.3`,
 
 ---
 
-## Usage
+## Deployment
+
+### VPS 1 — SAST Service Node
+
+```bash
+git clone -b SAST-as-a-Service https://github.com/Warwoyo/ojssast.git
+cd ojssast
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[service]'
+
+# Generate an API key for the agent
+ojs-sast-service gen-key
+
+# Start the service
+ojs-sast-service start --config /etc/ojs-sast/service.yml
+```
+
+### VPS 2 — OJS Target Node
+
+```bash
+git clone https://github.com/Warwoyo/ojs-sast-agent.git
+cd ojs-sast-agent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[agent]'
+
+# Submit a scan
+ojs-agent scan --ojs-path /var/www/ojs \
+  --sast-url https://vps1:8000 \
+  --api-key-file /etc/ojs-agent/key.txt
+```
+
+> **VPS 2 never clones the `Warwoyo/ojssast` repository.**
+
+---
+
+## Usage (Local CLI)
+
+The local CLI is still available for direct scanning on a machine where the
+core is installed:
 
 ```bash
 ojs-sast scan <ojs_path> [OPTIONS]
+ojs-sast scan-bundle --source source.tar.gz --meta meta.json
 ojs-sast list-rules [--module MODULE]
 ojs-sast version
 ```
@@ -96,6 +159,78 @@ ojs-sast list-rules --module source_code
 
 ---
 
+## Service API
+
+The SAST service exposes the following endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check (no auth) |
+| `/scan` | POST | Submit a scan bundle (multipart: `source_code` + `meta`) |
+| `/status/{scan_id}` | GET | Check scan status |
+| `/result/{scan_id}` | GET | Get full scan result JSON |
+| `/report/{scan_id}/{fmt}` | GET | Download report (json/html/sarif) |
+
+All endpoints except `/health` require `X-API-Key` header.
+
+### Bundle contract (`meta.json`)
+
+```json
+{
+  "schema_version": 1,
+  "agent_version": "1.0.0",
+  "agent_id": "ojs-vps-2",
+  "bundle_id": "uuid",
+  "created_at": "2026-06-06T00:00:00Z",
+  "ojs_version": "3.3.0-22",
+  "ojs_detected": true,
+  "detection_markers": ["config.inc.php", "lib/pkp"],
+  "source_label": "ojs-prod",
+  "scan_options": {
+    "categories": ["source_code", "config", "upload_directory"],
+    "min_severity": "MEDIUM",
+    "formats": ["json", "html", "sarif"]
+  },
+  "source_archive": {
+    "filename": "source.tar.gz",
+    "sha256": "...",
+    "bytes": 123456,
+    "top_level_dir": "source"
+  },
+  "config_files": {
+    "config.inc.php": "...",
+    "nginx:/etc/nginx/sites-enabled/ojs.conf": "..."
+  },
+  "upload_manifest": {
+    "entries": [
+      {
+        "path": "journals/1/articles/55/shell.php.jpg",
+        "filename": "shell.php.jpg",
+        "extension": ".jpg",
+        "size_bytes": 1204,
+        "head_hex": "3c3f706870206576616c28...",
+        "detected_mime": "application/x-php",
+        "null_byte_in_name": false,
+        "is_hidden": false
+      }
+    ]
+  }
+}
+```
+
+### Security
+
+- API key validation (SHA-256 hashed, constant-time comparison)
+- IP allowlist
+- Upload size limits
+- Safe tar extraction (path traversal, symlink/hardlink, device rejection)
+- Max files/bytes per archive
+- Limited active scans per key
+- Audit log (never logs raw keys, config text, or passwords)
+- Sandbox cleanup after scan
+
+---
+
 ## How it works (orchestration)
 
 1. **OJS detection** — verifies `config.inc.php` plus at least one core marker
@@ -123,79 +258,6 @@ A forward, intra-procedural data-flow pass over the PHP AST:
   traversal), `eval`/`system`/`exec`/`shell_exec`/… (code/command execution),
   `unserialize` (deserialization).
 
-Scopes are isolated per function/method, concatenation propagates taint, and
-SQL **binding** arguments are deliberately ignored to avoid false positives.
-
----
-
-## Rules & CVE mapping
-
-Rules live in `ojs_sast/ruleset/*.yaml`. Run `ojs-sast list-rules` for the full
-set (33 rules across the three modules).
-
-| Rule | Issue | CWE | CVE mapping (thesis ground truth) |
-| ---- | ----- | --- | --- |
-| RULE-SRC-001 | Smarty output without `\|escape` | CWE-79 | CVE-2023-5897, CVE-2025-67885/67888 |
-| RULE-SRC-002 | NativeXML/tainted filename in file op | CWE-22 | CVE-2023-5897, CVE-2025-67886 |
-| RULE-SRC-003 | Handler POST method missing CSRF check | CWE-352 | (mapped in ground-truth dataset) |
-| RULE-SRC-004 | LESS compiler injection | CWE-94 | CVE-2025-67887 |
-| RULE-SRC-005 | SQLi via `DB::raw`/`Capsule::raw` | CWE-89 | CVE-2025-67889 |
-| RULE-SRC-006 | `unserialize()` on user data | CWE-502 | — |
-| RULE-SRC-007/008 | Tainted XSS / code-exec sinks | CWE-79 / 94 / 78 | — |
-| OJS-CFG-SEC-003 | Insecure `allowed_hosts` | CWE-644 | CVE-2022-24181 |
-| RULE-UPLOAD-001…005 | Upload threats (5 layers) | CWE-434 / 94 | — |
-
-### Severity calibration
-
-CWE-89 (SQLi) → **CRITICAL** · CWE-502 (deserialization) → **CRITICAL** ·
-CWE-94 (code injection) → **CRITICAL** · CWE-79 (XSS) → **HIGH** ·
-CWE-22 (path traversal) → **HIGH** · CWE-352 (CSRF) → **MEDIUM**. Uploads: PHP
-executable → **CRITICAL**, other executables → **HIGH**.
-
-### Adding a rule
-
-```yaml
-rules:
-  - id: RULE-SRC-099
-    name: "My custom check"
-    module: source_code
-    cwe: CWE-79
-    severity: HIGH
-    pattern_type: regex          # regex | smarty | ast | taint | builtin
-    file_extensions: [".php"]
-    pattern: 'dangerous_call\s*\('
-    description: "..."
-    remediation: "..."
-    false_positive_exceptions:
-      - pattern: '@safe'
-        description: "Annotated as reviewed."
-```
-
-Point the tool at it with `--ruleset-dir /path/to/rules`.
-
----
-
-## False-positive handling & OJS version awareness
-
-* Smarty tags using `|escape` (any context) are never flagged.
-* PHP values passing through a recognized sanitizer or numeric cast clear taint.
-* Where a directive is **absent but secure-by-default** in newer OJS (e.g.
-  `session_cookie_httponly` / `session_samesite` from OJS 3.3.0), the finding is
-  downgraded to **INFO** and notes the version that changed the default.
-* SQL parameter bindings are not treated as injection.
-
----
-
-## Reports
-
-* **`findings.json`** — `scan_metadata`, `summary` (counts by severity/module),
-  and the full `findings` array.
-* **`report.html`** — self-contained dashboard: severity badges, a
-  sortable/filterable findings table, and expandable per-finding detail with
-  code snippets and remediation.
-* **`findings.sarif`** — SARIF 2.1.0 with rule metadata and `security-severity`,
-  ready to upload to GitHub Advanced Security.
-
 ---
 
 ## Project layout
@@ -206,19 +268,24 @@ ojs_sast/
 ├── orchestrator.py        # detection, scheduling, dedup, reporting; run_local + run_bundle
 ├── models/                # Severity, Rule, RuleMatch, Finding, ScanResult, ScanBundle
 ├── detectors/
-│   ├── source_scanner.py  # PHP taint + regex + Smarty + JS + CSRF
+│   ├── cve_scanner.py     # PHP taint + regex + Smarty + JS + CSRF
 │   ├── config_scanner.py  # config.inc.php + Nginx (scan / scan_payload / scan_texts)
 │   ├── upload_scanner.py  # 5-layer upload scanner (local files)
-│   └── upload_manifest_scanner.py  # same 5 layers over an agent manifest
-├── agent/                 # OJS-node agent: snapshot, config collector, manifest, client, CLI
+│   └── upload_manifest_scanner.py  # same 5 layers over raw-evidence manifest entries
 ├── service/               # SAST service: FastAPI app, auth, storage, queue, worker, sandbox
+├── helpers/               # path/PHP/Smarty/snippet/version/rule-applicability utilities
 ├── ruleset/
 │   ├── loader.py
-│   ├── source_rules.yaml
+│   ├── cve_rules.yaml
 │   ├── config_rules.yaml  # includes embedded SecLists top-500 passwords
 │   └── upload_rules.yaml  # includes webshell signatures
-└── reporters/             # json / html / sarif
+├── reporters/             # json / html / sarif
+└── utils/                 # logger
 ```
+
+> **Note:** The `ojs_sast/agent/` package has been removed from this repository.
+> The thin agent now lives in
+> [`Warwoyo/ojs-sast-agent`](https://github.com/Warwoyo/ojs-sast-agent).
 
 ---
 
@@ -232,10 +299,11 @@ pytest -q
 
 The suite covers taint analysis, pattern matching, the five upload layers,
 config (insecure vs. hardened), report generation, an end-to-end orchestrator
-run against a mock OJS tree, plus the agentic path: bundle round-trip and
-local↔remote parity, `scan_payload`, the upload-manifest scanner/builder,
-sandboxed archive extraction, and a FastAPI service integration test. The
-service tests skip automatically when the `service` extra is not installed.
+run against a mock OJS tree, plus the service path: bundle round-trip, worker
+`scan_options` enforcement, `scan_payload`, the upload-manifest scanner with
+service-side webshell/PDF detection from `head_hex`, sandboxed archive
+extraction, and FastAPI service integration tests. The service tests skip
+automatically when the `service` extra is not installed.
 
 ---
 
@@ -245,7 +313,8 @@ service tests skip automatically when the `service` extra is not installed.
 * JavaScript scanning is pattern-based only (no JS taint).
 * The CSRF check is a heuristic; verify against the handler's `authorize()`
   policy chain.
-* Webshell/PDF signatures are heuristic and read only the first 64 KB / 1 MB.
+* Webshell/PDF signatures are heuristic and read only the first 512 bytes of
+  `head_hex` (configurable in the manifest schema).
 
 ## License
 

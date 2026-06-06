@@ -218,8 +218,11 @@ class ConfigScanner:
         is treated as an nginx-style config and run through the nginx checks.
         """
         config_text = config_files.get("config.inc.php")
-        nginx_texts = [(text, name) for name, text in config_files.items()
-                       if name != "config.inc.php"]
+        nginx_texts = [
+            (text, name)
+            for name, text in config_files.items()
+            if name.startswith("nginx:")
+        ]
         findings = self.scan_texts(config_text, nginx_texts, config_label="config.inc.php")
         logger.info("Config payload scan complete: %d findings", len(findings))
         return findings

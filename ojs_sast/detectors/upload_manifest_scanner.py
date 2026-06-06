@@ -1,10 +1,12 @@
 """Upload-manifest scanner (service side).
 
 Re-applies the five upload-directory detection layers to *manifest entries*
-produced by the agent's ``UploadManifestBuilder`` instead of reading upload
-files directly. This lets the SAST service flag malicious uploads without ever
-receiving the upload files themselves — only their metadata, hashes, magic-byte
-derived MIME, and signature/marker evidence.
+produced by the agent instead of reading upload files directly.  The agent
+supplies only raw metadata (path, filename, extension, size, head_hex,
+detected_mime); all signature matching (webshell, PDF markers) is performed
+**service-side** from ``head_hex``.  This lets the SAST service flag malicious
+uploads without ever receiving the upload files themselves — and without
+requiring the agent to ship SAST core or ruleset code.
 
 Findings produced here are compatible with those of the local
 :class:`~ojs_sast.detectors.upload_scanner.UploadScanner` (same ``rule_id``,
@@ -103,7 +105,12 @@ def load_upload_layer_params(ruleset: Ruleset) -> UploadLayerParams:
 
 
 class UploadManifestScanner:
-    """Scan upload *manifest entries* and emit upload-directory findings."""
+    """Scan upload *manifest entries* and emit upload-directory findings.
+
+    All five detection layers run entirely service-side.  The agent only supplies
+    raw evidence (``head_hex``, ``extension``, ``filename``, ``detected_mime``);
+    the scanner performs signature / keyword matching itself from ``head_hex``.
+    """
 
     def __init__(self, ruleset: Ruleset, verbose: bool = False,
                  progress_cb: Optional[Callable[[str], None]] = None):
@@ -125,11 +132,23 @@ class UploadManifestScanner:
         self.php_mimes = params.php_mimes
         self.exec_mimes = params.exec_mimes
         self.expected_mime = params.expected_mime
+        # Service-side signature / keyword data (used by layers 4 & 5).
+        self.signatures = params.signatures
+        self.pdf_keywords = params.pdf_keywords
 
     # ----------------------------------------------------------------- #
     def _progress(self, msg: str) -> None:
         if self.progress_cb:
             self.progress_cb(msg)
+
+    @staticmethod
+    def _head_bytes(entry: dict) -> bytes:
+        """Decode ``head_hex`` from a manifest entry into raw bytes."""
+        raw = entry.get("head_hex") or ""
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            return b""
 
     def scan(self, manifest: Optional[List[Dict[str, Any]]]) -> List[Finding]:
         findings: List[Finding] = []
@@ -144,6 +163,8 @@ class UploadManifestScanner:
             if self.verbose:
                 self._progress(f"manifest: {rel}")
 
+            head = self._head_bytes(entry)
+
             # Layer 1: dangerous extension
             l1 = self._layer_dangerous_extension(rel, ext, mime)
             findings.extend(l1)
@@ -155,16 +176,14 @@ class UploadManifestScanner:
             l3 = self._layer_mime_mismatch(rel, ext, mime)
             findings.extend(l3)
 
-            # Layer 4: webshell signatures (gated — mirrors UploadScanner._scan_file).
+            # Layer 4: webshell signatures — run service-side from head_hex.
             gate = bool(l1) or bool(l3) or (mime in self.php_mimes) or (mime in ("text/plain",))
-            matches = entry.get("webshell_signature_matches") or []
-            if gate and matches:
-                findings.extend(self._emit_webshell(rel, ext, mime, matches))
+            if gate:
+                findings.extend(self._layer_webshell_from_head(rel, ext, mime, head))
 
-            # Layer 5: malicious PDF
-            markers = entry.get("pdf_active_markers") or []
-            if (ext == ".pdf" or mime == "application/pdf") and markers:
-                findings.extend(self._emit_pdf(rel, ext, mime, markers))
+            # Layer 5: malicious PDF — run service-side from head_hex.
+            if ext == ".pdf" or mime == "application/pdf":
+                findings.extend(self._layer_pdf_from_head(rel, ext, mime, head))
 
         logger.info("Upload manifest scan complete: %d entries, %d findings",
                     self.files_scanned, len(findings))
@@ -246,15 +265,35 @@ class UploadManifestScanner:
                              f"'{mime}'.", Severity.MEDIUM, mime, ext)]
         return []
 
-    # -- Evidence elevation (agent already matched signatures / markers) --- #
-    def _emit_webshell(self, rel, ext, mime, matches: List[str]) -> List[Finding]:
-        shown = list(matches)[:5]
+    # -- Service-side signature / keyword matching from head_hex ----------- #
+    def _layer_webshell_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
+        """Match webshell signatures against decoded head bytes."""
+        if not head:
+            return []
+        text = head.decode("utf-8", "replace")
+        matches: List[str] = []
+        for sig_id, pattern, detail in self.signatures:
+            if pattern.search(text):
+                matches.append(detail or sig_id)
+        if not matches:
+            return []
+        shown = matches[:5]
         more = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
         return [self._mk(self.r_shell, rel, "webshell_signature",
                          f"PHP webshell signature(s) detected: {'; '.join(shown)}{more}.",
                          Severity.CRITICAL, mime, ext, fallback_cwe="CWE-94")]
 
-    def _emit_pdf(self, rel, ext, mime, markers: List[str]) -> List[Finding]:
+    def _layer_pdf_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
+        """Match malicious-PDF keywords against decoded head bytes."""
+        if not head:
+            return []
+        found: List[str] = []
+        for token, detail in self.pdf_keywords:
+            if token.encode("latin-1", "ignore") in head:
+                found.append(detail or token)
+        if not found:
+            return []
         return [self._mk(self.r_pdf, rel, "pdf_payload",
-                         f"PDF contains active-content markers: {'; '.join(markers)}.",
+                         f"PDF contains active-content markers: {'; '.join(found)}.",
                          Severity.HIGH, mime, ".pdf", fallback_cwe="CWE-434")]
+

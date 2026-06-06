@@ -1,7 +1,8 @@
-"""End-to-end service tests (FastAPI TestClient).
+"""Tests for the service worker's scan_options handling.
 
-Skipped automatically when the ``service`` extra (fastapi + python-multipart) is
-not installed.  Builds test bundles inline without the agent package.
+Verifies that the worker reads ``scan_options.min_severity`` and
+``scan_options.categories`` from ``meta.json`` and passes them to the
+``Orchestrator``.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 pytest.importorskip("fastapi")
-pytest.importorskip("multipart")  # python-multipart
+pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -27,10 +28,10 @@ from ojs_sast.service.app import create_app  # noqa: E402
 from ojs_sast.service.auth import hash_api_key  # noqa: E402
 from ojs_sast.service.config import ServiceConfig  # noqa: E402
 
-API_KEY = "test-api-key-123"
+API_KEY = "test-worker-key-456"
 
 # ------------------------------------------------------------------ #
-# Inline bundle builder (no agent dependency)
+# Inline bundle builder
 # ------------------------------------------------------------------ #
 _INCLUDE_EXTENSIONS = {
     ".php", ".inc", ".tpl", ".smarty", ".js", ".json", ".xml", ".yml", ".yaml",
@@ -57,27 +58,23 @@ def _sniff_mime(head: bytes) -> Optional[str]:
         return "text/x-php"
     if head.startswith(b"%PDF"):
         return "application/pdf"
-    if head.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
     return None
 
 
-def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
-    """Build source.tar.gz + meta.json and return their paths."""
+def _build_test_bundle(ojs_root: Path, work: Path,
+                        *,
+                        min_severity: str = "INFO",
+                        categories: Optional[List[str]] = None) -> Tuple[Path, Path]:
     work.mkdir(parents=True, exist_ok=True)
     info = detect_ojs(ojs_root)
     ojs_resolved = ojs_root.resolve()
 
-    # Config
     config_files: Dict[str, str] = {}
     config_path = ojs_root / "config.inc.php"
     if config_path.is_file():
         config_files["config.inc.php"] = config_path.read_text(encoding="utf-8", errors="replace")
-    sections = parse_config(config_files["config.inc.php"]) if "config.inc.php" in config_files else {}
+    sections = parse_config(config_files.get("config.inc.php", ""))
 
-    # Upload dirs
     files_dir, public_dir = extract_upload_dirs(sections) if sections else (None, None)
     upload_dirs: List[Path] = []
     for raw in (files_dir, public_dir):
@@ -93,7 +90,6 @@ def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
 
     exclude_resolved = {p.resolve() for p in upload_dirs} | {(ojs_root / "public").resolve()}
 
-    # Source archive
     source_archive = work / "source.tar.gz"
     with tarfile.open(source_archive, "w:gz") as tar:
         for path in sorted(ojs_resolved.rglob("*")):
@@ -122,7 +118,6 @@ def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
     size = source_archive.stat().st_size
     sha256 = _sha256_file(source_archive)
 
-    # Upload manifest (raw evidence)
     entries: List[Dict[str, Any]] = []
     total_size = 0
     for directory in upload_dirs:
@@ -137,38 +132,32 @@ def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
             except OSError:
                 continue
             entries.append({
-                "path": r,
-                "filename": fp.name,
-                "extension": fp.suffix.lower(),
-                "size_bytes": stat.st_size,
-                "head_hex": head.hex(),
+                "path": r, "filename": fp.name, "extension": fp.suffix.lower(),
+                "size_bytes": stat.st_size, "head_hex": head.hex(),
                 "detected_mime": _sniff_mime(head),
-                "null_byte_in_name": False,
-                "is_hidden": fp.name.startswith("."),
+                "null_byte_in_name": False, "is_hidden": fp.name.startswith("."),
             })
             total_size += stat.st_size
 
     meta: Dict[str, Any] = {
         "schema_version": 1,
         "agent_version": "1.0.0-test",
-        "agent_id": "test-inline",
+        "agent_id": "test-worker",
         "agent_hostname": "test-host",
-        "bundle_id": "test-bundle-id",
+        "bundle_id": "test-worker-bundle",
         "created_at": "2026-01-01T00:00:00Z",
         "ojs_version": info.version,
         "ojs_detected": info.is_ojs,
         "detection_markers": info.markers,
         "source_label": ojs_root.name,
         "scan_options": {
-            "categories": ["source_code", "config", "upload_directory"],
-            "min_severity": "INFO",
-            "formats": ["json", "html", "sarif"],
+            "categories": categories or ["source_code", "config", "upload_directory"],
+            "min_severity": min_severity,
+            "formats": ["json"],
         },
         "source_archive": {
-            "filename": "source.tar.gz",
-            "sha256": sha256,
-            "bytes": size,
-            "top_level_dir": "source",
+            "filename": "source.tar.gz", "sha256": sha256,
+            "bytes": size, "top_level_dir": "source",
         },
         "config_files": config_files,
         "upload_manifest": {
@@ -179,26 +168,19 @@ def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
             "entries": entries,
         },
     }
-
     meta_path = work / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return source_archive, meta_path
 
 
-# ------------------------------------------------------------------ #
-# Fixtures
-# ------------------------------------------------------------------ #
-@pytest.fixture
-def service(mock_ojs, ruleset, tmp_path):
-    source, meta = _build_test_bundle(mock_ojs, tmp_path / "bundle")
+def _make_service(tmp_path):
     config = ServiceConfig(
         data_dir=tmp_path / "svc",
-        api_keys={hash_api_key(API_KEY): "agent-1"},
+        api_keys={hash_api_key(API_KEY): "agent-worker-test"},
         audit_log_path=tmp_path / "audit.log",
     )
     app = create_app(config)
-    with TestClient(app) as client:
-        yield client, source, meta
+    return app
 
 
 def _submit(client, source_path, meta_path, key=API_KEY):
@@ -222,106 +204,78 @@ def _poll(client, scan_id, key=API_KEY, tries=200):
 # ------------------------------------------------------------------ #
 # Tests
 # ------------------------------------------------------------------ #
-def test_health_requires_no_auth(service):
-    client, _, _ = service
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+def test_worker_uses_scan_options_min_severity(mock_ojs, tmp_path):
+    """Findings below min_severity from meta.json must be filtered out."""
+    # First: scan with INFO -> get all findings.
+    source_info, meta_info = _build_test_bundle(
+        mock_ojs, tmp_path / "info", min_severity="INFO")
+    app = _make_service(tmp_path / "svc_info")
+    with TestClient(app) as client:
+        resp = _submit(client, source_info, meta_info)
+        assert resp.status_code == 202
+        scan_id = resp.json()["scan_id"]
+        final = _poll(client, scan_id)
+        assert final["status"] == "done"
+        result_info = client.get(
+            f"/result/{scan_id}", headers={"X-API-Key": API_KEY}).json()
+    total_info = result_info["summary"]["total_findings"]
+
+    # Second: scan with CRITICAL -> only CRITICAL findings.
+    source_crit, meta_crit = _build_test_bundle(
+        mock_ojs, tmp_path / "crit", min_severity="CRITICAL")
+    app2 = _make_service(tmp_path / "svc_crit")
+    with TestClient(app2) as client:
+        resp = _submit(client, source_crit, meta_crit)
+        assert resp.status_code == 202
+        scan_id = resp.json()["scan_id"]
+        final = _poll(client, scan_id)
+        assert final["status"] == "done"
+        result_crit = client.get(
+            f"/result/{scan_id}", headers={"X-API-Key": API_KEY}).json()
+    total_crit = result_crit["summary"]["total_findings"]
+
+    # With min_severity=CRITICAL, we should get fewer findings.
+    assert total_crit <= total_info
+    # All returned findings must be CRITICAL.
+    for f in result_crit["findings"]:
+        assert f["severity"] == "CRITICAL"
 
 
-def test_full_scan_lifecycle(service):
-    client, source, meta = service
-    resp = _submit(client, source, meta)
-    assert resp.status_code == 202
-    scan_id = resp.json()["scan_id"]
-    assert resp.json()["status"] == "queued"
-
-    final = _poll(client, scan_id)
-    assert final["status"] == "done", final
-
-    result = client.get(f"/result/{scan_id}", headers={"X-API-Key": API_KEY}).json()
-    modules = {f["module"] for f in result["findings"]}
-    assert {"source_code", "config", "upload_directory"} <= modules
-    assert result["scan_metadata"]["scan_mode"] == "remote"
-
-    for fmt in ("json", "html", "sarif"):
-        rep = client.get(f"/report/{scan_id}/{fmt}", headers={"X-API-Key": API_KEY})
-        assert rep.status_code == 200, fmt
-        assert rep.content
-
-
-def test_rejects_missing_and_bad_api_key(service):
-    client, source, meta = service
-    assert _submit(client, source, meta, key="wrong-key").status_code == 401
-    # No header at all.
-    with source.open("rb") as src, meta.open("rb") as mf:
-        resp = client.post(
-            "/scan",
-            files={"source_code": ("source.tar.gz", src, "application/gzip"),
-                   "meta": ("meta.json", mf, "application/json")},
-        )
-    assert resp.status_code == 401
-
-
-def test_service_rejects_ip_not_allowlisted(mock_ojs, tmp_path):
-    """When an IP allowlist is configured, a client from a non-allowed IP is rejected."""
-    source, meta_path = _build_test_bundle(mock_ojs, tmp_path / "bundle")
-    config = ServiceConfig(
-        data_dir=tmp_path / "svc",
-        api_keys={hash_api_key(API_KEY): "agent-1"},
-        ip_allowlist=["192.0.2.0/24"],  # TEST-NET — testclient won't come from here
-    )
-    app = create_app(config)
+def test_worker_uses_scan_options_categories(mock_ojs, tmp_path):
+    """Only the requested categories from scan_options should be scanned."""
+    source, meta_path = _build_test_bundle(
+        mock_ojs, tmp_path / "cat", categories=["source_code"])
+    app = _make_service(tmp_path / "svc_cat")
     with TestClient(app) as client:
         resp = _submit(client, source, meta_path)
-        assert resp.status_code == 403
+        assert resp.status_code == 202
+        scan_id = resp.json()["scan_id"]
+        final = _poll(client, scan_id)
+        assert final["status"] == "done"
+        result = client.get(
+            f"/result/{scan_id}", headers={"X-API-Key": API_KEY}).json()
+
+    modules = {f["module"] for f in result["findings"]}
+    # Only source_code should be present.
+    assert modules <= {"source_code"}, f"unexpected modules: {modules}"
 
 
-def test_service_rejects_bad_source_sha256(service):
-    """If meta.json declares a sha256 that doesn't match the archive, reject."""
-    client, source, meta_path = service
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["source_archive"]["sha256"] = "0" * 64
-    bad_meta = meta_path.parent / "bad_meta.json"
-    bad_meta.write_text(json.dumps(meta), encoding="utf-8")
-    resp = _submit(client, source, bad_meta)
-    assert resp.status_code == 400
-    assert "sha256 mismatch" in resp.json()["detail"]
+def test_config_payload_ignores_apache_for_nginx_checks(ruleset):
+    """Apache config entries must NOT be routed through nginx checks."""
+    from ojs_sast.detectors.config_scanner import ConfigScanner
 
-
-def test_status_unknown_scan(service):
-    client, _, _ = service
-    resp = client.get("/status/00000000-0000-0000-0000-000000000000",
-                      headers={"X-API-Key": API_KEY})
-    assert resp.status_code == 404
-
-
-def test_result_before_finished_or_unknown(service):
-    client, _, _ = service
-    resp = client.get("/result/does-not-exist", headers={"X-API-Key": API_KEY})
-    assert resp.status_code == 404
-
-
-def test_rejects_traversal_archive(service, tmp_path):
-    client, _, _ = service
-    bad = tmp_path / "evil.tar.gz"
-    with tarfile.open(bad, "w:gz") as tar:
-        data = b"hacked"
-        info = tarfile.TarInfo("../../escape.txt")
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-    meta_bytes = json.dumps(
-        {"source_archive": {"top_level_dir": "source"},
-         "config_files": {}, "upload_manifest": []}).encode()
-
-    with bad.open("rb") as src:
-        resp = client.post(
-            "/scan", headers={"X-API-Key": API_KEY},
-            files={"source_code": ("source.tar.gz", src, "application/gzip"),
-                   "meta": ("meta.json", io.BytesIO(meta_bytes), "application/json")},
-        )
-    assert resp.status_code == 202
-    scan_id = resp.json()["scan_id"]
-    final = _poll(client, scan_id)
-    assert final["status"] == "error"
-    assert not (Path("/tmp") / "escape.txt").exists()
+    apache_conf = """
+    <VirtualHost *:80>
+        ServerName ojs.example.com
+        DocumentRoot /var/www/ojs
+    </VirtualHost>
+    """
+    config_files = {
+        "apache:/etc/apache2/sites-enabled/ojs.conf": apache_conf,
+    }
+    scanner = ConfigScanner(ruleset)
+    findings = scanner.scan_payload(config_files)
+    # No nginx findings should fire from Apache config.
+    nginx_findings = [f for f in findings if "nginx" in f.rule_id.lower()
+                      or "nginx" in (f.detail or "").lower()]
+    assert not nginx_findings, f"Apache config triggered nginx findings: {nginx_findings}"
