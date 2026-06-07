@@ -60,3 +60,23 @@ def test_scan_texts_handles_missing_config(ruleset):
     nginx_text = (FIXTURES / "config" / "nginx_insecure.conf").read_text(encoding="utf-8")
     findings = ConfigScanner(ruleset).scan_texts(None, [(nginx_text, "nginx:x")])
     assert findings  # nginx checks fired without any config.inc.php
+
+
+def test_config_payload_ignores_apache_for_nginx_checks(ruleset):
+    """Apache config entries (keyed ``apache:...``) must not be routed to nginx checks."""
+    apache_conf = """\
+<VirtualHost *:80>
+    ServerName ojs.example.com
+    DocumentRoot /var/www/ojs
+</VirtualHost>
+"""
+    # Only apache key, no nginx key.
+    findings = ConfigScanner(ruleset).scan_payload({
+        "apache:/etc/apache2/sites-enabled/ojs.conf": apache_conf,
+    })
+    nginx_findings = [f for f in findings
+                      if str(f.rule_id).startswith("OJS-CFG-NGX")]
+    assert not nginx_findings, (
+        f"Apache config wrongly triggered nginx findings: "
+        f"{[f.rule_id for f in nginx_findings]}")
+

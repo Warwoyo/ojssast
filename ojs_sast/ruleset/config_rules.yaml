@@ -1,25 +1,199 @@
-# Configuration rules for ojs-sast (config.inc.php + Nginx).
+# =============================================================================
+# OJS Config SAST Ruleset — config.inc.php Scanner
+# Ground truth: ojs_config_sast_groundtruth.json
+# =============================================================================
 #
-# IDs aligned to OJS config SAST ground-truth check IDs.
-# Groups: general (GEN), security (SEC), database (DB), files (FILE),
-#         email (EMAIL), captcha (CAP), debug (DBG), nginx (NGX).
+# SCOPE : config.inc.php only.
+#         Nginx rules removed — out of scope for OJS config scanning.
 #
-# FALSE-POSITIVE / VERSION AWARENESS: where a directive is absent but the OJS
-# default is secure (httponly, samesite in 3.3.0+), the finding is downgraded to
-# INFO and notes the version that changed the default.
+# GROUND TRUTH TRACEABILITY:
+#   Rules with ground_truth: true map 1:1 to an entry in
+#   ojs_config_sast_groundtruth.json via ground_truth_check_id.
+#   Rules with ground_truth: false extend coverage but are backed
+#   by PKP official documentation (not the GT dataset); they are
+#   included because they scan the same config.inc.php file and
+#   are explicitly recommended in the PKP Admin Guide.
+#
+# SEVERITY — aligned to CVSS v3.1 base score from ground truth:
+#   CRITICAL >= 9.0 | HIGH 7.0-8.9 | MEDIUM 4.0-6.9 | LOW 0.1-3.9
+#
+# GROUPS:
+#   GEN     — [general] section
+#   SEC     — [security] section
+#   DB      — [database] section
+#   DBG     — [debug] section
+#   EMAIL   — [email] section
+#   CAP     — [captcha] section
+#   FILE    — file-level checks (non-GT, PKP Admin Guide-backed)
+# =============================================================================
 
 rules:
-  # ============================== GROUP: general ==============================
+
+  # ===========================================================================
+  # GROUP: general — [general] section checks
+  # ===========================================================================
+
   - id: OJS-CFG-GEN-001
-    name: "Installation status must be On in production"
+    name: "Insecure allowed_hosts — empty string trusts all Host headers"
+    module: config
+    cwe: CWE-20
+    owasp: "A05:2021"
+    severity: MEDIUM
+    cvss_score: 6.1
+    pattern_type: builtin
+    cve_references:
+      - "CVE-2022-26616"
+    params:
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-001
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: allowed_hosts
+      section: general
+      key: allowed_hosts
+      insecure_values:
+        - ""
+        - "''"
+        - "\"\""
+    description: >-
+      allowed_hosts is empty, meaning OJS trusts any value in the HTTP Host,
+      X-Forwarded-Host, or Server-Name headers without validation. An
+      unauthenticated attacker can forge the Host header so that OJS embeds
+      the attacker-controlled hostname into password-reset emails; the victim
+      clicks the poisoned link and the attacker captures the reset token.
+      This affects all OJS/OMP/OPS releases up to 3.3.0-8 (CVE-2022-26616).
+      PKP config.TEMPLATE.inc.php states: "An empty string indicates that all
+      hosts should be trusted (not recommended!)".
+    remediation: >-
+      Set allowed_hosts to an explicit JSON array of all legitimate hostnames
+      for this installation:
+        allowed_hosts = \'["myjournal.example.ac.id", "www.myjournal.example.ac.id"]\'
+      After applying, verify by temporarily misconfiguring the value — OJS
+      should return HTTP 400 Bad Request on any page load.
+
+  - id: OJS-CFG-GEN-002
+    name: "Weak session_samesite policy — cookie sent on cross-site requests"
+    module: config
+    cwe: CWE-352
+    owasp: "A01:2021"
+    severity: MEDIUM
+    cvss_score: 6.1
+    pattern_type: builtin
+    params:
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-002
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: enum_directive
+      section: general
+      key: session_samesite
+      secure_values:
+        - "Lax"
+        - "Strict"
+      insecure_values:
+        - "None"
+      default_when_absent: "Lax"
+      absent_severity: INFO
+    description: >-
+      session_samesite is set to None. This instructs browsers to include
+      the OJSSID session cookie in all cross-origin requests, removing the
+      SameSite-based CSRF defense. A malicious website visited by a
+      logged-in OJS user can trigger authenticated actions (e.g. changing
+      settings, initiating submissions) via hidden cross-site requests.
+      The OJS config.TEMPLATE.inc.php default is Lax, which is secure.
+      MDN (directly referenced in the template) mandates Strict or Lax.
+    remediation: >-
+      Set session_samesite = Lax (the PKP default, suitable for most
+      deployments) or Strict (maximum CSRF protection). Use SameSite=None
+      only when third-party embedded access is genuinely required AND
+      force_ssl = On is enabled.
+
+  - id: OJS-CFG-GEN-003
+    name: "Excessive session_lifetime — session cookies persist beyond 30 days"
+    module: config
+    cwe: CWE-613
+    owasp: "A07:2021"
+    severity: LOW
+    cvss_score: 3.7
+    pattern_type: builtin
+    params:
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-003
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: integer_threshold
+      section: general
+      key: session_lifetime
+      # Value unit: DAYS (as documented in config.TEMPLATE.inc.php).
+      # Insecure if value exceeds 30 days (PKP default).
+      # Previous ruleset had 43200 (wrong — that is 43200 days, not seconds).
+      operator: "<="
+      threshold: 30
+      default_when_absent: "30"
+      warn_severity: low
+    description: >-
+      session_lifetime exceeds 30 days (unit: days, as documented in
+      config.TEMPLATE.inc.php: "Number of days to save login cookie for if
+      user selects to remember"). A long-lived session token extends the
+      window during which a stolen OJSSID cookie can be replayed to
+      impersonate a user. This risk is highest for administrator accounts
+      on shared or public devices where users forget to log out.
+      OWASP Session Management Cheat Sheet requires absolute timeouts.
+    remediation: >-
+      Keep session_lifetime at 30 or fewer (days). For high-security
+      installations set session_lifetime = 0 to expire sessions when the
+      browser closes. Remind users to log out after each session on shared
+      computers.
+
+  - id: OJS-CFG-GEN-004
+    name: "trust_x_forwarded_for enabled — client IP can be spoofed"
+    module: config
+    cwe: CWE-346
+    owasp: "A05:2021"
+    severity: MEDIUM
+    cvss_score: 5.3
+    pattern_type: builtin
+    params:
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-004
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: bool_directive
+      section: general
+      key: trust_x_forwarded_for
+      secure_value: "Off"
+      insecure_value: "On"
+      # PKP warning in config.TEMPLATE.inc.php:
+      # "Warning: This defaults to On if unset for backwards compatibility."
+      default_when_absent: "On"
+      absent_severity: MEDIUM
+    description: >-
+      trust_x_forwarded_for is On (or absent — PKP warns the absent default
+      is On for backward compatibility). OJS uses the X-Forwarded-For header
+      to determine the client IP address. This header is attacker-controlled
+      and trivially spoofable; any IP-based security control — rate limiting,
+      Fail2ban blocks, IP allowlists — can be bypassed by forging this header.
+    remediation: >-
+      Set trust_x_forwarded_for = Off unless OJS sits behind a verified,
+      controlled reverse proxy (e.g. Nginx or a load balancer you operate).
+      If a reverse proxy is in use, configure it to overwrite (not append)
+      X-Forwarded-For before forwarding requests to OJS.
+
+  - id: OJS-CFG-GEN-005
+    name: "installed = Off — OJS installer may still be accessible"
     module: config
     cwe: CWE-1188
     owasp: "A05:2021"
     severity: HIGH
+    cvss_score: 8.1
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-005
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -30,99 +204,30 @@ rules:
       insecure_value: "Off"
       default_when_absent: "Off"
     description: >-
-      `installed` is Off, meaning the OJS installer/setup wizard is still
-      accessible. An attacker could re-initialize the database and take over.
-    remediation: "Ensure `installed = On` in [general] on deployed systems."
-
-  - id: OJS-CFG-GEN-002
-    name: "base_url must use HTTPS and not be a placeholder"
-    module: config
-    cwe: CWE-319
-    owasp: "A02:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: base_url_scheme
-      section: general
-      key: base_url
-      required_scheme: "https"
-      placeholder_values:
-        - "https://pkp.sfu.ca/ojs"
-        - "http://pkp.sfu.ca/ojs"
-    description: >-
-      `base_url` uses HTTP or is still the default placeholder. Canonical
-      URLs should use HTTPS for transport security.
+      installed is Off in config.inc.php. The OJS installation wizard has not
+      been completed, or the flag was not set after installation. An attacker
+      who discovers the OJS install URL can re-run the installer, reconfigure
+      the database credentials, or reset administrator passwords — potentially
+      gaining full administrative control of the OJS installation.
+      config.TEMPLATE.inc.php: "Set this to On once the system has been
+      installed (This is generally done automatically by the installer)."
     remediation: >-
-      Set `base_url` to `https://your-domain.example.org` with a valid TLS
-      certificate configured on the web server.
+      Complete the OJS installation process; the installer sets installed = On
+      automatically. If OJS is already running, manually set installed = On
+      in the [general] section of config.inc.php. Verify no installer pages
+      are accessible from the public web after this change.
 
-  - id: OJS-CFG-GEN-003
-    name: "Insecure allowed_hosts (empty or wildcard)"
+  - id: OJS-CFG-GEN-006
+    name: "allow_url_fopen enabled — remote URL file access permitted"
     module: config
-    cwe: CWE-644
+    cwe: CWE-829
     owasp: "A05:2021"
-    severity: HIGH
-    pattern_type: builtin
-    cve_references: ["CVE-2022-24181"]
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.1.2"
-        - "<3.6.0"
-      check: allowed_hosts
-      section: general
-      key: allowed_hosts
-      insecure_values: ["", "*"]
-    description: >-
-      `allowed_hosts` is empty or a wildcard, so OJS trusts the inbound Host
-      header. This enables Host header injection: poisoned password-reset links,
-      cache poisoning, and open-redirect style attacks (CVE-2022-24181 class).
-    remediation: >-
-      Set `allowed_hosts` to an explicit JSON array of valid hostnames, e.g.
-      `allowed_hosts = '["journal.example.org"]'`.
-
-  - id: OJS-CFG-GEN-004
-    name: "trust_x_forwarded_for enabled"
-    module: config
-    cwe: CWE-290
-    owasp: "A05:2021"
-    severity: MEDIUM
+    severity: LOW
+    cvss_score: 3.1
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: general
-      key: trust_x_forwarded_for
-      secure_value: "Off"
-      insecure_value: "On"
-      default_when_absent: "Off"
-    description: >-
-      `trust_x_forwarded_for` is On. Unless behind a trusted reverse proxy,
-      this allows IP spoofing for session_check_ip bypass and log tampering.
-    remediation: >-
-      Set `trust_x_forwarded_for = Off` unless a trusted reverse proxy sets
-      X-Forwarded-For headers and the proxy strips client-supplied values.
-
-  - id: OJS-CFG-GEN-005
-    name: "allow_url_fopen enabled"
-    module: config
-    cwe: CWE-918
-    owasp: "A10:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-GEN-006
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -131,158 +236,33 @@ rules:
       key: allow_url_fopen
       secure_value: "Off"
       insecure_value: "On"
-      default_when_absent: "On"
-    description: >-
-      `allow_url_fopen` is On. This enables fopen-family functions to access
-      remote URLs, which can be abused in SSRF scenarios.
-    remediation: "Set `allow_url_fopen = Off` unless explicitly required."
-
-  - id: OJS-CFG-GEN-006
-    name: "Excessive session_lifetime"
-    module: config
-    cwe: CWE-613
-    owasp: "A07:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: integer_threshold
-      section: general
-      key: session_lifetime
-      operator: "<="
-      threshold: 43200
-      default_when_absent: "0"
-      warn_severity: low
-    description: >-
-      `session_lifetime` exceeds 12 hours (43200 seconds), allowing sessions
-      to persist for extended periods if not closed.
-    remediation: "Set `session_lifetime` to 43200 or less."
-
-  - id: OJS-CFG-GEN-007
-    name: "Weak session_samesite policy"
-    module: config
-    cwe: CWE-1275
-    owasp: "A05:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.4.0"
-        - "<3.6.0"
-      check: enum_directive
-      section: general
-      key: session_samesite
-      secure_values: ["Lax", "Strict"]
-      default_when_absent: "Lax"
-      absent_severity: INFO
-      default_since: "3.3.0"
-    description: >-
-      `session_samesite` is None or empty, so the session cookie is sent on
-      cross-site requests, weakening CSRF protection.
-    remediation: "Set `session_samesite = Lax` (or Strict for stricter isolation)."
-
-  - id: OJS-CFG-GEN-008
-    name: "Sandbox mode should be Off in production"
-    module: config
-    cwe: CWE-16
-    owasp: "A05:2021"
-    severity: INFO
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: general
-      key: sandbox
-      secure_value: "Off"
-      insecure_value: "On"
       default_when_absent: "Off"
     description: >-
-      `sandbox` is On. Sandbox mode restricts certain operations but may
-      indicate a non-production configuration.
-    remediation: "Set `sandbox = Off` for production deployments."
+      allow_url_fopen is On. The PKP default is Off. Enabling this setting
+      permits PHP fopen-family functions to open remote URLs as if they were
+      local file resources. In combination with other vulnerabilities (e.g.
+      path traversal or injection), this can contribute to Remote File
+      Inclusion scenarios. PKP config.TEMPLATE.inc.php defaults this to Off.
+    remediation: >-
+      Set allow_url_fopen = Off unless a specific OJS integration (e.g.
+      citation-checking services) explicitly requires remote URL access and
+      no alternative is available. Document and review any exception.
 
-  - id: OJS-CFG-GEN-009
-    name: "Show upgrade warning"
-    module: config
-    severity: INFO
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: informational_directive
-      section: general
-      key: show_upgrade_warning
-    description: >-
-      Whether upgrade warnings are displayed to the user.
-    remediation: "None required."
+  # ===========================================================================
+  # GROUP: security — [security] section checks
+  # ===========================================================================
 
-  - id: OJS-CFG-GEN-010
-    name: "Enable beacon"
-    module: config
-    severity: INFO
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: informational_directive
-      section: general
-      key: enable_beacon
-    description: >-
-      Enable PKP beacon.
-    remediation: "None required."
-
-  - id: OJS-CFG-GEN-011
-    name: "User validation period"
-    module: config
-    cwe: CWE-799
-    owasp: "A04:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: integer_threshold
-      section: general
-      key: user_validation_period
-      operator: ">"
-      threshold: 0
-      default_when_absent: "0"
-      warn_severity: low
-    description: >-
-      `user_validation_period` is 0 (or absent), meaning email validation period is disabled.
-      Users can register and log in immediately without completing email verification first.
-    remediation: "Set `user_validation_period` to a positive integer (e.g. 14 days)."
-
-  # ============================== GROUP: security ============================
   - id: OJS-CFG-SEC-001
-    name: "force_ssl disabled"
+    name: "force_ssl disabled — traffic served without TLS encryption"
     module: config
     cwe: CWE-319
     owasp: "A02:2021"
     severity: MEDIUM
+    cvss_score: 5.9
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-001
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -290,22 +270,32 @@ rules:
       section: security
       key: force_ssl
       secure_value: "On"
+      insecure_value: "Off"
       default_when_absent: "Off"
     description: >-
-      `force_ssl` is Off, so OJS does not redirect traffic to HTTPS. Session
-      cookies and credentials can be transmitted in cleartext.
-    remediation: "Set `force_ssl = On` and serve the site over TLS only."
+      force_ssl is Off. OJS will serve all pages over HTTP without TLS
+      encryption. Session cookies (OJSSID) and login credentials are
+      transmitted in plaintext, allowing any network observer on the same
+      path (campus Wi-Fi, ISP) to intercept and replay them. The Secure flag
+      is also not set on session cookies when force_ssl is Off.
+      PKP Admin Guide Security Checklist: "Set up an SSL certificate and
+      configure the application to use https://".
+    remediation: >-
+      Install a valid TLS certificate (Let\'s Encrypt provides free certs)
+      and set force_ssl = On. Also update base_url to use https://. Validate
+      the certificate configuration at https://www.ssllabs.com/ssltest/.
 
   - id: OJS-CFG-SEC-002
-    name: "force_login_ssl disabled"
+    name: "force_login_ssl disabled — login credentials transmitted without encryption"
     module: config
     cwe: CWE-319
     owasp: "A02:2021"
     severity: MEDIUM
+    cvss_score: 5.9
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-002
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -313,23 +303,34 @@ rules:
       section: security
       key: force_login_ssl
       secure_value: "On"
+      insecure_value: "Off"
       default_when_absent: "Off"
+      # This finding is only actionable when force_ssl is also Off.
+      # If force_ssl = On, this setting is redundant but not harmful.
+      conditional_note: "Report only if force_ssl is also Off."
     description: >-
-      `force_login_ssl` is Off. Login credentials may be submitted in
-      cleartext if the login page is not forced to HTTPS.
+      force_login_ssl is Off (and force_ssl is also Off). User login
+      credentials (username and password) are submitted to OJS over
+      unencrypted HTTP. A network attacker performing passive sniffing can
+      capture these in plaintext from the HTTP POST body. PKP GitHub Issue
+      #2716 documented that this setting also fails to protect registration
+      pages — new user passwords are equally exposed in transit.
     remediation: >-
-      Set `force_login_ssl = On`. Ideally also set `force_ssl = On`.
+      As a minimum, set force_login_ssl = On. Preferably enable force_ssl = On
+      to protect all OJS traffic. A valid TLS certificate must be installed
+      on the server before enabling either setting.
 
   - id: OJS-CFG-SEC-003
-    name: "session_check_ip disabled"
+    name: "session_check_ip disabled — session IP binding is off"
     module: config
-    cwe: CWE-384
+    cwe: CWE-613
     owasp: "A07:2021"
     severity: MEDIUM
+    cvss_score: 4.3
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-003
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -340,97 +341,100 @@ rules:
       insecure_value: "Off"
       default_when_absent: "On"
     description: >-
-      `session_check_ip` is Off. Session hijacking is easier when the session
-      is not bound to the client IP address.
-    remediation: "Set `session_check_ip = On`."
+      session_check_ip is explicitly set to Off, removing IP-based session
+      validation. When Off, OJS does not verify that the IP address of
+      subsequent requests matches the IP that created the session. A stolen
+      OJSSID cookie can be replayed from any network location without
+      triggering automatic session invalidation, significantly extending the
+      exploitation window for session hijacking. The PKP default is On.
+    remediation: >-
+      Keep session_check_ip = On (the PKP default). Only disable this if
+      users are behind proxy farms where legitimate IP changes mid-session
+      cause problems. If disabled, document the security trade-off.
 
   - id: OJS-CFG-SEC-004
-    name: "Insecure encryption algorithm (md5)"
+    name: "Insecure password hashing algorithm — encryption set to md5"
     module: config
-    cwe: CWE-327
+    cwe: CWE-916
     owasp: "A02:2021"
-    severity: HIGH
+    severity: MEDIUM
+    cvss_score: 5.9
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-004
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
       check: enum_directive
       section: security
       key: encryption
-      secure_values: ["sha1"]
+      secure_values:
+        - "sha1"
       default_when_absent: "sha1"
     description: >-
-      `encryption` is set to md5 or an unsupported value. PKP requires sha1
-      (legacy migration hash; modern hashing done internally).
-    remediation: "Set `encryption = sha1`."
+      encryption is set to md5. MD5 has been cryptographically broken since
+      2004 and is unsuitable for password storage. If an attacker gains access
+      to the OJS database (via SQL injection or backup theft), all stored
+      password hashes can be reversed using precomputed rainbow tables or
+      GPU cracking tools within minutes. PKP Admin Guide Security Checklist:
+      "Make sure the encryption setting in config.inc.php is set to sha1."
+    remediation: >-
+      Set encryption = sha1 in the [security] section. Note: changing this
+      setting on an existing installation invalidates all existing password
+      hashes — users will need to reset their passwords. Plan a coordinated
+      rollout with advance notice to users.
 
   - id: OJS-CFG-SEC-005
-    name: "session_expire_on_close disabled"
+    name: "Default or weak security salt — password reset hashes are predictable"
     module: config
-    cwe: CWE-613
-    owasp: "A07:2021"
-    severity: LOW
+    cwe: CWE-1188
+    owasp: "A05:2021"
+    severity: HIGH
+    cvss_score: 7.5
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: security
-      key: session_expire_on_close
-      secure_value: "On"
-      default_when_absent: "Off"
-    description: >-
-      `session_expire_on_close` is Off. Sessions persist after browser close,
-      increasing risk on shared devices.
-    remediation: "Set `session_expire_on_close = On`."
-
-  - id: OJS-CFG-SEC-006
-    name: "Weak or default security salt"
-    module: config
-    cwe: CWE-330
-    owasp: "A02:2021"
-    severity: CRITICAL
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-005
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
       check: value_strength
       section: security
       key: salt
-      min_length: 24
+      min_length: 32
       default_values:
+        - "YouMustSetASecretKeyHere!!"
         - "changeme"
+        - "secret"
         - "YOUR_UNIQUE_SALT"
         - ""
-        - "secret"
-        - "YouMustSetASecretKeyHere!!"
     description: >-
-      The `salt` is empty, set to a known default placeholder, or shorter than
-      24 characters. The salt protects password-reset hashes, API keys and email
-      verification tokens; a weak or default salt undermines all of them.
+      The salt value is empty, too short (< 32 characters), or still matches
+      a well-known default string (e.g. "YouMustSetASecretKeyHere!!" from the
+      config template). The salt is used to generate password-reset token
+      hashes. An attacker who knows the default salt can predict or pre-compute
+      valid reset tokens, enabling targeted account takeover without direct
+      database access. PKP Admin Guide Security Checklist: "Use a long, random
+      value for each one of the salt and api_secret_key settings."
     remediation: >-
-      Set `salt` to at least 32 random bytes (e.g. `openssl rand -base64 48`) and
-      keep it secret. Rotating the salt invalidates all existing reset tokens.
+      Generate a cryptographically random salt of at least 32 characters:
+        php -r "echo bin2hex(random_bytes(32));"
+      Replace the salt value in config.inc.php. Rotating the salt invalidates
+      all existing password-reset tokens — inform administrators before changing
+      on a production system.
 
-  - id: OJS-CFG-SEC-007
-    name: "Empty or default api_key_secret"
+  - id: OJS-CFG-SEC-006
+    name: "Empty api_key_secret — API keys lack cryptographic protection"
     module: config
-    cwe: CWE-798
-    owasp: "A02:2021"
-    severity: HIGH
+    cwe: CWE-1188
+    owasp: "A05:2021"
+    severity: MEDIUM
+    cvss_score: 6.5
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-SEC-006
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -438,275 +442,39 @@ rules:
       section: security
       key: api_key_secret
       min_length: 24
-      default_values: ["", "changeme", "YOUR_API_KEY_SECRET"]
-    description: >-
-      `api_key_secret` is empty or set to a default. This secret signs API tokens;
-      a predictable value lets attackers forge or decrypt API credentials.
-    remediation: >-
-      Set `api_key_secret` to a long random value and restart the application.
-
-  - id: OJS-CFG-SEC-008
-    name: "Excessive password reset token lifetime"
-    module: config
-    cwe: CWE-640
-    owasp: "A07:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: integer_threshold
-      section: security
-      key: reset_seconds
-      operator: "<="
-      threshold: 7200
-      default_when_absent: "7200"
-      warn_severity: low
-    description: >-
-      `reset_seconds` exceeds 7200 (2 hours), giving attackers a wider window
-      to abuse password-reset tokens.
-    remediation: "Set `reset_seconds` to 7200 or less (3600 recommended)."
-
-  - id: OJS-CFG-SEC-009
-    name: "Unrestricted plugin installation"
-    module: config
-    cwe: CWE-434
-    owasp: "A08:2021"
-    severity: HIGH
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: enum_directive
-      section: security
-      key: allow_plugin_install
-      secure_values: ["gallery_only", "upgrade_only", "off"]
-      default_when_absent: "on"
-    description: >-
-      `allow_plugin_install` is 'on' (or absent, defaulting to 'on'),
-      allowing arbitrary plugin uploads. If a manager account is compromised
-      this enables RCE.
-    remediation: >-
-      Set `allow_plugin_install = gallery_only` or `off` in production.
-
-  - id: OJS-CFG-SEC-010
-    name: "Admin re-authentication timeout disabled"
-    module: config
-    cwe: CWE-613
-    owasp: "A01:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.5.0"
-        - "<3.6.0"
-      check: integer_threshold
-      section: security
-      key: password_timeout
-      operator: ">"
-      threshold: 0
-      default_when_absent: "0"
-      warn_severity: medium
-    description: >-
-      `password_timeout` is 0 (or absent), so admin sessions never require
-      re-authentication for sensitive operations.
-    remediation: "Set `password_timeout = 15` (minutes) to require periodic re-auth."
-
-  - id: OJS-CFG-SEC-011
-    name: "Weak cipher for app key encryption"
-    module: config
-    cwe: CWE-326
-    owasp: "A02:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.5.0"
-        - "<3.6.0"
-      check: enum_directive
-      section: security
-      key: cipher
-      secure_values: ["aes-256-gcm", "aes-256-cbc"]
-      default_when_absent: "aes-256-cbc"
-      absent_severity: INFO
-    description: >-
-      `cipher` uses a 128-bit key or is not set. 256-bit AES is recommended.
-    remediation: "Set `cipher = aes-256-gcm` for authenticated encryption."
-
-  - id: OJS-CFG-SEC-012
-    name: "Cookie encryption disabled"
-    module: config
-    cwe: CWE-311
-    owasp: "A02:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.5.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: security
-      key: cookie_encryption
-      secure_value: "On"
-      insecure_value: "Off"
-      default_when_absent: "On"
-      absent_severity: INFO
-    description: >-
-      `cookie_encryption` is Off. Cookie values are transmitted unencrypted.
-    remediation: "Set `cookie_encryption = On` (requires valid app_key)."
-
-  - id: OJS-CFG-SEC-013
-    name: "Empty or missing app_key"
-    module: config
-    cwe: CWE-798
-    owasp: "A02:2021"
-    severity: HIGH
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.5.0"
-        - "<3.6.0"
-      check: value_strength
-      section: general
-      key: app_key
-      min_length: 24
-      default_values: ["", '""']
-    description: >-
-      `app_key` is empty or too short. This key is required for cookie
-      encryption and internal cryptographic operations in OJS 3.5+.
-    remediation: >-
-      Set `app_key` to a base64-encoded random key (generated by installer or
-      `php artisan key:generate` equivalent).
-
-  - id: OJS-CFG-SEC-014
-    name: "Dangerous tags in allowed_html whitelist"
-    module: config
-    cwe: CWE-79
-    owasp: "A03:2021"
-    severity: INFO
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: allowed_html_tags
-      section: security
-      key: allowed_html
-      dangerous_patterns:
-        - "script"
-        - "iframe"
-        - "object"
-        - "embed"
-        - "style"
-    description: >-
-      The `allowed_html` whitelist contains potentially dangerous tags
-      (script, iframe, object, embed, style) that could enable XSS.
-    remediation: >-
-      Remove dangerous tags from `allowed_html`. Keep the OJS default safe list.
-
-  # ============================== GROUP: database ============================
-  - id: OJS-CFG-DB-001
-    name: "Weak or default database credentials"
-    module: config
-    cwe: CWE-521
-    owasp: "A07:2021"
-    severity: HIGH
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: default_db_credentials
-      section: database
-      # Keep breached_passwords list to satisfy test_breached_password_list_embedded in test_ruleset.py
-      # We put enough passwords here to meet the test's >400 password criteria
-      breached_passwords:
-        - "password"
-        - "123456"
-        - "12345678"
-        - "1234"
-        - "qwerty"
-        - "12345"
-        - "dragon"
-        - "baseball"
-        - "football"
-        - "letmein"
-        - "monkey"
-        - "abc123"
-        - "mustang"
-        - "shadow"
-        - "master"
-        - "111111"
-        - "2000"
-        - "superman"
-        - "harley"
-        - "1234567"
-        - "trustno1"
-        - "ranger"
-        - "buster"
-        - "tigger"
-        - "soccer"
-        - "batman"
-        - "test"
-        - "pass"
-        - "killer"
-        - "hockey"
-        - "george"
-        - "charlie"
-        - "andrew"
-        - "sunshine"
-        - "iloveyou"
-        - "654321"
-        - "123456789"
-        - "starwars"
-        - "123123"
-        - "666666"
-        - "hello"
-        - "freedom"
-        - "whatever"
-        - "qazwsx"
-        - "welcome"
-        - "admin"
-        - "root"
+      default_values:
+        - ""
         - "changeme"
-        - "ojs"
-        - "mysql"
-        - "database"
-        - "secret"
+        - "YOUR_API_KEY_SECRET"
     description: >-
-      Weak or default database credentials (such as username ojs and password ojs,
-      empty password, password equal to database name, or commonly breached passwords)
-      are easily guessed or brute-forced.
-    remediation: "Use a strong random password for the database user."
+      api_key_secret is empty (or too short / matches a known default). OJS
+      uses this secret to encode and decode API keys that grant programmatic
+      access to submission management, user data, and journal configuration.
+      Without a strong secret the key encoding provides no cryptographic
+      protection — API keys may be predictable or forgeable. PKP Admin Guide
+      Security Checklist lists api_key_secret alongside salt as requiring a
+      long, random value.
+    remediation: >-
+      Generate a unique, random value of at least 32 characters:
+        php -r "echo bin2hex(random_bytes(32));"
+      Use a value different from the salt. Set it in the [security] section
+      and restart OJS or clear any cached configuration.
 
-  - id: OJS-CFG-DB-002
-    name: "Database debug mode enabled"
+  # ===========================================================================
+  # GROUP: database — [database] section checks
+  # ===========================================================================
+
+  - id: OJS-CFG-DB-001
+    name: "Database debug mode enabled in production"
     module: config
     cwe: CWE-209
     owasp: "A05:2021"
-    severity: HIGH
+    severity: MEDIUM
+    cvss_score: 5.3
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-DB-001
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -717,210 +485,78 @@ rules:
       insecure_value: "On"
       default_when_absent: "Off"
     description: >-
-      `debug` is On in [database]. SQL queries and errors are logged or
-      displayed, leaking internal structure.
-    remediation: "Set `debug = Off` in [database] for production."
+      debug is On in the [database] section. OJS will output verbose SQL query
+      information — including table names, column names, query parameters, and
+      error details — in application responses. This information significantly
+      aids an attacker in mapping the database schema and crafting targeted SQL
+      injection payloads. PKP config.TEMPLATE.inc.php labels this "(very
+      verbose!)" and defaults it to Off.
+    remediation: >-
+      Set debug = Off in the [database] section. Database debug mode must
+      never be enabled in production. Use isolated development environments
+      with restricted network access for any SQL debugging activities.
 
-  - id: OJS-CFG-DB-003
-    name: "Insecure remote database connection"
+  - id: OJS-CFG-DB-EXT-001
+    name: "Weak or default database credentials"
     module: config
-    cwe: CWE-319
-    owasp: "A02:2021"
-    severity: MEDIUM
+    cwe: CWE-521
+    owasp: "A07:2021"
+    severity: HIGH
+    cvss_score: 7.5
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: false
+      # Source: PKP config.TEMPLATE.inc.php defaults (username=ojs, password=ojs).
+      # PKP Admin Guide: "Dedicate a database to the application."
       affected_versions:
-        - ">=3.5.0"
+        - ">=3.3.0"
         - "<3.6.0"
-      check: db_secure_remote
+      check: default_db_credentials
       section: database
+      breached_passwords:
+        - "ojs"
+        - "password"
+        - "123456"
+        - "12345678"
+        - "qwerty"
+        - "admin"
+        - "root"
+        - "changeme"
+        - "secret"
+        - "database"
+        - "mysql"
+        - "test"
+        - ""
     description: >-
-      The database host is remote and SSL/TLS secure connection is not enabled.
-      Database traffic including credentials could be intercepted.
-    remediation: "Configure `secure = On` or connect via a local UNIX socket or SSH tunnel."
-
-  # ============================== GROUP: files ==============================
-  - id: OJS-CFG-FILE-001
-    name: "files_dir located inside the web root"
-    module: config
-    cwe: CWE-552
-    owasp: "A05:2021"
-    severity: CRITICAL
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: files_dir_webroot
-      section: files
-      key: files_dir
-    description: >-
-      `files_dir` (private uploads: submissions, reviews) resolves to a path
-      inside the OJS web root, so uploaded files may be directly downloadable or
-      executable over HTTP, bypassing access control.
+      The database password is empty, equals the username, equals the database
+      name, or matches a commonly breached password (e.g. the PKP template
+      default "ojs"/"ojs"). Weak database credentials are trivially guessable
+      or brute-forced if the database port is inadvertently exposed. This check
+      is not backed by the GT dataset but is supported by the PKP Admin Guide
+      Security Checklist: "Dedicate a database to the application."
     remediation: >-
-      Move `files_dir` to a directory outside the web root (e.g. /var/ojs/files)
-      that the web server will not serve.
+      Use a strong, randomly generated password for the OJS database user:
+        openssl rand -base64 32
+      Grant the database user only the minimum necessary privileges (SELECT,
+      INSERT, UPDATE, DELETE on the OJS database only). Ensure the database
+      is not accessible from the public network (bind to 127.0.0.1 or use
+      a Unix socket).
 
-  - id: OJS-CFG-FILE-002
-    name: "Insecure umask"
-    module: config
-    cwe: CWE-732
-    owasp: "A05:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: enum_directive
-      section: files
-      key: umask
-      secure_values: ["0027", "0077", "027", "077"]
-      default_when_absent: "0022"
-    description: >-
-      `umask` is set to a permissive value (e.g. 0022) that creates
-      world-readable files. Submission files may be readable by other
-      users on the server.
-    remediation: "Set `umask = 0027` or `0077` to restrict file permissions."
+  # ===========================================================================
+  # GROUP: debug — [debug] section checks
+  # ===========================================================================
 
-  - id: OJS-CFG-FILE-003
-    name: "Excessive public user directory size limit"
-    module: config
-    cwe: CWE-400
-    owasp: "A05:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: integer_threshold
-      section: files
-      key: public_user_dir_size
-      operator: "<="
-      threshold: 5000
-      default_when_absent: "5000"
-      warn_severity: low
-    description: >-
-      `public_user_dir_size` exceeds 5000 KB, allowing users to upload excessive amounts
-      of data to their public directories, which could lead to denial of service.
-    remediation: "Set `public_user_dir_size` to 5000 or less."
-
-  - id: OJS-CFG-FILE-004
-    name: "config.inc.php missing PHP exit guard"
-    module: config
-    cwe: CWE-538
-    owasp: "A05:2021"
-    severity: CRITICAL
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: guard_line
-      guard_tokens: ["<?php", "exit"]
-      scan_lines: 3
-    description: >-
-      config.inc.php should begin with a `;<\?php exit; ?>` guard so that if the
-      web server ever serves the file as plain text or executes it as PHP, the
-      database credentials and secrets are not disclosed. The guard is missing.
-    remediation: >-
-      Add `;<\?php exit; ?>` as the very first line of config.inc.php and keep the
-      file outside the web root where possible.
-
-  # ============================== GROUP: email ==============================
-  - id: OJS-CFG-EMAIL-001
-    name: "SMTP certificate verification suppressed"
-    module: config
-    cwe: CWE-295
-    owasp: "A02:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: email
-      key: smtp_suppress_cert_check
-      secure_value: "Off"
-      insecure_value: "On"
-      default_when_absent: "Off"
-    description: >-
-      `smtp_suppress_cert_check` is On, disabling TLS certificate verification
-      for SMTP, enabling MITM attacks on email transport.
-    remediation: "Set `smtp_suppress_cert_check = Off` (or leave commented)."
-
-  - id: OJS-CFG-EMAIL-002
-    name: "Email validation not required before login"
-    module: config
-    cwe: CWE-799
-    owasp: "A04:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.3.0"
-        - "<3.6.0"
-      check: bool_directive
-      section: email
-      key: require_validation
-      secure_value: "On"
-      default_when_absent: "Off"
-    description: >-
-      `require_validation` is Off. Users can log in without validating their
-      email, facilitating spam bot registration.
-    remediation: "Set `require_validation = On` to require email verification."
-
-  # ============================== GROUP: captcha ============================
-  - id: OJS-CFG-CAP-001
-    name: "No CAPTCHA engine enabled"
-    module: config
-    cwe: CWE-799
-    owasp: "A04:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
-      affected_versions:
-        - ">=3.4.0"
-        - "<3.6.0"
-      check: captcha_engine
-      section: captcha
-    description: >-
-      Neither reCAPTCHA nor ALTCHA is enabled, so there is no bot protection
-      on registration/login forms.
-    remediation: >-
-      Enable ALTCHA (`altcha = on; altcha_on_register = on`) or reCAPTCHA
-      with valid keys in [captcha].
-
-  # ============================== GROUP: debug ==============================
   - id: OJS-CFG-DBG-001
-    name: "show_stacktrace enabled in production"
+    name: "show_stacktrace enabled — full PHP stack traces exposed to users"
     module: config
     cwe: CWE-209
     owasp: "A05:2021"
-    severity: HIGH
+    severity: MEDIUM
+    cvss_score: 5.3
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-DBG-001
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -931,20 +567,30 @@ rules:
       insecure_value: "On"
       default_when_absent: "Off"
     description: >-
-      `show_stacktrace` is On, exposing file paths and stack frames in error
-      output to end users, aiding reconnaissance.
-    remediation: "Set `show_stacktrace = Off` in production."
+      show_stacktrace is On. When OJS encounters a fatal error it renders a
+      full PHP stack trace to the browser, exposing absolute server file paths,
+      PHP class names, method signatures, function argument values, and internal
+      application flow. An attacker can deliberately trigger errors (e.g. via
+      malformed requests) to harvest this reconnaissance data. PKP config.
+      TEMPLATE.inc.php explicitly warns: "this may expose private information
+      and should be disabled for any production system."
+    remediation: >-
+      Set show_stacktrace = Off in the [debug] section. Configure server-side
+      PHP error logging in php.ini (log_errors = On; error_log = /path/to/
+      php_errors.log) to retain diagnostic capability without exposing
+      information to users.
 
   - id: OJS-CFG-DBG-002
-    name: "display_errors enabled in production"
+    name: "display_errors enabled — PHP error messages exposed in browser"
     module: config
     cwe: CWE-209
     owasp: "A05:2021"
-    severity: HIGH
+    severity: MEDIUM
+    cvss_score: 5.3
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-DBG-002
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
@@ -955,167 +601,209 @@ rules:
       insecure_value: "On"
       default_when_absent: "Off"
     description: >-
-      `display_errors` is On, exposing PHP error messages with internal
-      paths and structures to end users.
-    remediation: "Set `display_errors = Off` in production."
+      display_errors is On. PHP notices, warnings, and errors are rendered
+      inline in OJS page responses. These messages reveal file paths, variable
+      names, line numbers, and PHP version information. Even non-fatal warnings
+      provide reconnaissance data that attackers use to map internal application
+      structure and identify exploitable conditions (CWE-209). The PKP default
+      is Off; OJS-services.com states: "Set to Off in production."
+    remediation: >-
+      Set display_errors = Off in the [debug] section. Configure PHP error
+      logging at the server level: php.ini -> display_errors = Off;
+      log_errors = On; error_log = /path/to/errors.log.
 
-  - id: OJS-CFG-DBG-003
-    name: "Deprecation warnings enabled in production"
+  # ===========================================================================
+  # GROUP: email — [email] section checks
+  # ===========================================================================
+
+  - id: OJS-CFG-EMAIL-001
+    name: "require_validation disabled — email verification not required before login"
     module: config
-    cwe: CWE-209
-    owasp: "A05:2021"
-    severity: LOW
+    cwe: CWE-306
+    owasp: "A07:2021"
+    severity: MEDIUM
+    cvss_score: 5.3
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-EMAIL-001
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
       check: bool_directive
-      section: debug
-      key: deprecation_warnings
-      secure_value: "Off"
-      insecure_value: "On"
+      section: email
+      key: require_validation
+      secure_value: "On"
+      insecure_value: "Off"
       default_when_absent: "Off"
     description: >-
-      `deprecation_warnings` is On, displaying deprecation notices that
-      leak internal code structure.
-    remediation: "Set `deprecation_warnings = Off` in production."
+      require_validation is Off. Users can register and immediately log in to
+      OJS without verifying their email address. This allows automated bots or
+      malicious actors to create large numbers of fake accounts using arbitrary
+      or disposable email addresses, enabling spam submissions, abuse of
+      editorial workflows, and exploitation of vulnerabilities requiring an
+      authenticated context. Sarjimin et al. (2025) explicitly implemented
+      require_validation = On as part of their OJS brute-force mitigation.
+    remediation: >-
+      Set require_validation = On in the [email] section. Ensure the OJS
+      email system (SMTP or sendmail) is correctly configured so validation
+      emails reach new users. Also set validation_timeout = 14 to automatically
+      expire unvalidated accounts after 14 days.
 
-  - id: OJS-CFG-DBG-004
-    name: "Web service info logging enabled"
+  - id: OJS-CFG-EMAIL-002
+    name: "smtp_suppress_cert_check enabled — SMTP certificate verification disabled"
     module: config
-    cwe: CWE-532
-    owasp: "A09:2021"
-    severity: LOW
+    cwe: CWE-295
+    owasp: "A02:2021"
+    severity: MEDIUM
+    cvss_score: 5.9
     pattern_type: builtin
     params:
-      # affected_versions controls version applicability, not rule loading.
-      # A rule may be loaded but not applicable to the scanned OJS version.
+      ground_truth: true
+      ground_truth_check_id: CFG-EMAIL-002
       affected_versions:
         - ">=3.3.0"
         - "<3.6.0"
       check: bool_directive
-      section: debug
-      key: log_web_service_info
+      section: email
+      key: smtp_suppress_cert_check
       secure_value: "Off"
       insecure_value: "On"
+      # Commented-out in config.TEMPLATE.inc.php = effectively Off.
       default_when_absent: "Off"
     description: >-
-      `log_web_service_info` is On, recording web service request data that
-      may contain sensitive information.
-    remediation: "Set `log_web_service_info = Off` unless actively debugging."
+      smtp_suppress_cert_check is On. OJS does not verify the SSL/TLS
+      certificate of the SMTP server when establishing an email connection.
+      A Man-in-the-Middle attacker positioned between OJS and the SMTP server
+      can intercept all outgoing emails — including password-reset links and
+      reviewer invitations — without OJS detecting the interception. PKP
+      config.TEMPLATE.inc.php explicitly warns: "Note: this is not recommended
+      for security reasons."
+    remediation: >-
+      Comment out or remove smtp_suppress_cert_check from config.inc.php, or
+      explicitly set it to Off. Ensure the configured SMTP server uses a valid,
+      CA-issued SSL/TLS certificate. If a self-signed certificate is necessary,
+      configure OJS to reference it via the cainfo setting rather than
+      suppressing verification entirely.
 
-  # ============================== Extensions =================================
-  - id: OJS-CFG-EXT-COOKIE-001
-    name: "session_cookie_httponly disabled"
+  # ===========================================================================
+  # GROUP: captcha — [captcha] section checks
+  # ===========================================================================
+
+  - id: OJS-CFG-CAP-001
+    name: "CAPTCHA disabled — no automated-access protection on login and registration"
     module: config
-    cwe: CWE-1004
-    owasp: "A05:2021"
+    cwe: CWE-307
+    owasp: "A07:2021"
     severity: MEDIUM
+    cvss_score: 6.5
     pattern_type: builtin
     params:
-      check: bool_directive
-      section: general
-      key: session_cookie_httponly
-      secure_value: "On"
-      default_when_absent: "On"
-      absent_severity: INFO
-      default_since: "3.3.0"
-      ground_truth: false
+      ground_truth: true
+      ground_truth_check_id: CFG-CAPTCHA-001
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: captcha_engine
+      section: captcha
+      # check: captcha_engine evaluates the [captcha] section holistically.
+      # A finding is raised when neither recaptcha = on nor altcha = on
+      # is configured, meaning no CAPTCHA protection is active.
     description: >-
-      The session cookie is not flagged HttpOnly, so client-side JavaScript can
-      read it, escalating any XSS into full session theft.
-    remediation: "Set `session_cookie_httponly = On`."
+      No CAPTCHA engine is enabled on OJS login and registration forms.
+      OJS has no native login attempt rate limiting or account lockout
+      mechanism. Without CAPTCHA, automated scripts can perform brute-force
+      attacks against administrator and user credentials at machine speed, and
+      register unlimited fake accounts for spam or exploitation. Sarjimin et
+      al. (2025) confirmed this with CVSS 6.5 (Medium) and implemented Google
+      CAPTCHA as the primary mitigation. Guntoro et al. (2020) also identified
+      brute-force as an active threat vector in OJS installations.
+    remediation: >-
+      Enable Google reCAPTCHA by obtaining keys from
+      https://www.google.com/recaptcha, then in [captcha]:
+        recaptcha = on
+        recaptcha_public_key  = YOUR_SITE_KEY
+        recaptcha_private_key = YOUR_SECRET_KEY
+        captcha_on_register = on
+        captcha_on_login    = on
+        recaptcha_enforce_hostname = On
+      Complement with server-level rate limiting (e.g. Fail2ban) configured
+      to block IPs after 3–5 consecutive failed login attempts.
 
-  - id: OJS-CFG-EXT-PATH-INFO
-    name: "disable_path_info not enabled"
+  # ===========================================================================
+  # GROUP: file — file-level checks on config.inc.php
+  # (non-GT; backed by PKP Admin Guide and config.TEMPLATE.inc.php)
+  # ===========================================================================
+
+  - id: OJS-CFG-FILE-001
+    name: "config.inc.php missing PHP exit guard on first line"
     module: config
-    cwe: CWE-16
+    cwe: CWE-538
     owasp: "A05:2021"
-    severity: MEDIUM
+    severity: HIGH
+    cvss_score: 7.5
     pattern_type: builtin
     params:
-      check: bool_directive
-      section: general
-      key: disable_path_info
-      secure_value: "On"
-      default_when_absent: "Off"
       ground_truth: false
+      # Source: OJS config.TEMPLATE.inc.php line 1:
+      # "; <?php exit; // DO NOT DELETE?>"
+      # The guard prevents credentials being served if the web server
+      # ever delivers config.inc.php as plain text.
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: guard_line
+      guard_tokens:
+        - "<?php"
+        - "exit"
+      scan_lines: 3
     description: >-
-      `disable_path_info` is Off. On some server configurations PATH_INFO URLs
-      can bypass front-controller routing and access controls.
-    remediation: "Set `disable_path_info = On` unless PATH_INFO routing is required."
+      config.inc.php does not begin with the PHP exit guard:
+        ; <?php exit; // DO NOT DELETE?>
+      This guard prevents the database credentials and cryptographic secrets
+      in config.inc.php from being disclosed as plain text if the web server
+      ever serves the file directly (e.g. due to a misconfigured rewrite rule,
+      .htaccess override, or accidental web-root exposure). The guard is
+      present in every OJS config.TEMPLATE.inc.php and is explicitly annotated
+      "DO NOT DELETE". This check is not backed by the GT dataset but derives
+      from the PKP template itself.
+    remediation: >-
+      Ensure the very first line of config.inc.php is:
+        ; <?php exit; // DO NOT DELETE?>
+      Keep config.inc.php outside the web root where possible, and restrict
+      file permissions to 600 (owner read/write only).
 
-  # ============================== Nginx ======================================
-  - id: OJS-CFG-NGX-001
-    name: "PHP execution not blocked in upload directory"
+  - id: OJS-CFG-FILE-002
+    name: "files_dir located inside the OJS web root"
     module: config
-    cwe: CWE-434
+    cwe: CWE-552
     owasp: "A05:2021"
     severity: CRITICAL
+    cvss_score: 9.1
     pattern_type: builtin
     params:
-      check: nginx_upload_php_block
       ground_truth: false
+      # Source: PKP Admin Guide (securing-your-system.md):
+      # "Make sure the files_dir folder can not be accessed through the web."
+      # "Failure to meet this requirement is the only significant security
+      # risk faced by OJS journals."
+      affected_versions:
+        - ">=3.3.0"
+        - "<3.6.0"
+      check: files_dir_webroot
+      section: files
+      key: files_dir
     description: >-
-      No Nginx location block was found denying execution/access to the uploads
-      (files/public) directory. If a PHP file is uploaded it could be executed,
-      yielding remote code execution.
+      files_dir resolves to a path inside the OJS web root, meaning submitted
+      manuscripts, reviewer files, and other private uploads may be directly
+      accessible or executable over HTTP, bypassing OJS access control. PKP
+      Admin Guide states: "Make sure the files_dir folder cannot be accessed
+      through the web" and classifies this as the only significant security
+      risk faced by OJS journals. This check is not backed by the GT dataset
+      but derives directly from the PKP Admin Guide Security Checklist.
     remediation: >-
-      Add a location block such as `location ~* /(files|public)/.*\.php$ { deny all; }`
-      or `location ^~ /files/ { deny all; }` to stop PHP execution in upload paths.
-
-  - id: OJS-CFG-NGX-002
-    name: "Missing HTTP security headers"
-    module: config
-    cwe: CWE-693
-    owasp: "A05:2021"
-    severity: LOW
-    pattern_type: builtin
-    params:
-      check: nginx_security_headers
-      required_headers:
-        - X-Frame-Options
-        - X-Content-Type-Options
-        - Content-Security-Policy
-        - Referrer-Policy
-      ground_truth: false
-    description: >-
-      One or more recommended security response headers are not configured in
-      Nginx, weakening defenses against clickjacking, MIME sniffing and
-      injection.
-    remediation: >-
-      Add `add_header` directives for X-Frame-Options, X-Content-Type-Options,
-      Content-Security-Policy and Referrer-Policy.
-
-  - id: OJS-CFG-NGX-003
-    name: "server_tokens not disabled"
-    module: config
-    cwe: CWE-200
-    owasp: "A05:2021"
-    severity: INFO
-    pattern_type: builtin
-    params:
-      check: nginx_server_tokens
-      ground_truth: false
-    description: >-
-      `server_tokens off;` was not found, so Nginx advertises its version in
-      responses and error pages, aiding fingerprinting.
-    remediation: "Add `server_tokens off;` in the http/server block."
-
-  - id: OJS-CFG-NGX-004
-    name: "Directory listing (autoindex) enabled"
-    module: config
-    cwe: CWE-548
-    owasp: "A05:2021"
-    severity: MEDIUM
-    pattern_type: builtin
-    params:
-      check: nginx_autoindex
-      ground_truth: false
-    description: >-
-      `autoindex on;` is set, exposing directory listings that can leak file
-      names and uploaded content.
-    remediation: "Set `autoindex off;` (the default) for served locations."
+      Move files_dir to a directory completely outside the web root, e.g.:
+        files_dir = /var/ojs/files
+      Set read/write permissions so only the web server process user can
+      access the directory. After moving, update files_dir in config.inc.php
+      and verify OJS can write to the new location.

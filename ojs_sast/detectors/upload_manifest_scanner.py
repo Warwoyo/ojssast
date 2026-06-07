@@ -1,10 +1,12 @@
 """Upload-manifest scanner (service side).
 
 Re-applies the five upload-directory detection layers to *manifest entries*
-produced by the agent's ``UploadManifestBuilder`` instead of reading upload
-files directly. This lets the SAST service flag malicious uploads without ever
-receiving the upload files themselves — only their metadata, hashes, magic-byte
-derived MIME, and signature/marker evidence.
+produced by the agent instead of reading upload files directly.  The agent
+supplies only raw metadata (path, filename, extension, size, head_hex,
+detected_mime); all signature matching (webshell, PDF markers) is performed
+**service-side** from ``head_hex``.  This lets the SAST service flag malicious
+uploads without ever receiving the upload files themselves — and without
+requiring the agent to ship SAST core or ruleset code.
 
 Findings produced here are compatible with those of the local
 :class:`~ojs_sast.detectors.upload_scanner.UploadScanner` (same ``rule_id``,
@@ -150,6 +152,15 @@ class UploadManifestScanner:
         if self.progress_cb:
             self.progress_cb(msg)
 
+    @staticmethod
+    def _head_bytes(entry: dict) -> bytes:
+        """Decode ``head_hex`` from a manifest entry into raw bytes."""
+        raw = entry.get("head_hex") or ""
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            return b""
+
     def scan(self, manifest: Optional[List[Dict[str, Any]]]) -> List[Finding]:
         findings: List[Finding] = []
         for entry in manifest or []:
@@ -162,6 +173,8 @@ class UploadManifestScanner:
             self.files_scanned += 1
             if self.verbose:
                 self._progress(f"manifest: {rel}")
+
+            head = self._head_bytes(entry)
 
             # Layer 1: dangerous extension
             l1 = self._layer_dangerous_extension(rel, ext, mime)
@@ -297,3 +310,4 @@ class UploadManifestScanner:
         return [self._mk(self.r_pdf, rel, "pdf_payload",
                          f"PDF contains active-content markers: {'; '.join(found)}.",
                          Severity.HIGH, mime, ".pdf", fallback_cwe="CWE-434")]
+

@@ -1,7 +1,7 @@
 """End-to-end service tests (FastAPI TestClient).
 
 Skipped automatically when the ``service`` extra (fastapi + python-multipart) is
-not installed.
+not installed.  Builds test bundles inline without the agent package.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import tarfile
 import time
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -26,6 +27,18 @@ from ojs_sast.service.config import ServiceConfig  # noqa: E402
 
 API_KEY = "test-api-key-123"
 
+# ------------------------------------------------------------------ #
+# Inline bundle builder (no agent dependency)
+# ------------------------------------------------------------------ #
+_INCLUDE_EXTENSIONS = {
+    ".php", ".inc", ".tpl", ".smarty", ".js", ".json", ".xml", ".yml", ".yaml",
+}
+_EXCLUDE_DIRS = {
+    ".git", ".svn", ".hg", "node_modules", "vendor", "cache", "tmp", "logs",
+    "files", "uploads", "__pycache__",
+}
+_WHITELIST_FILES = {"version.xml"}
+_HEAD_HEX_BYTES = 512
 
 def _build_minimal_bundle(tmp_path: Path):
     """Build a minimal source.tar.gz + meta.json without the agent module."""
@@ -102,11 +115,11 @@ def service_ip_restricted(tmp_path):
     )
     app = create_app(config)
     with TestClient(app) as client:
-        yield client, paths
+        yield client, source, meta
 
 
-def _submit(client, paths, key=API_KEY):
-    with paths.source_archive.open("rb") as src, paths.meta_json.open("rb") as meta:
+def _submit(client, source_path, meta_path, key=API_KEY):
+    with source_path.open("rb") as src, meta_path.open("rb") as meta:
         return client.post(
             "/scan", headers={"X-API-Key": key},
             files={"source_code": ("source.tar.gz", src, "application/gzip"),
@@ -176,8 +189,8 @@ def test_service_rejects_bad_sha256(service, tmp_path):
 
 
 def test_full_scan_lifecycle(service):
-    client, paths = service
-    resp = _submit(client, paths)
+    client, source, meta = service
+    resp = _submit(client, source, meta)
     assert resp.status_code == 202
     scan_id = resp.json()["scan_id"]
     assert resp.json()["status"] == "queued"
@@ -195,20 +208,20 @@ def test_full_scan_lifecycle(service):
 
 
 def test_status_unknown_scan(service):
-    client, _ = service
+    client, _, _ = service
     resp = client.get("/status/00000000-0000-0000-0000-000000000000",
                       headers={"X-API-Key": API_KEY})
     assert resp.status_code == 404
 
 
 def test_result_before_finished_or_unknown(service):
-    client, _ = service
+    client, _, _ = service
     resp = client.get("/result/does-not-exist", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 404
 
 
 def test_rejects_traversal_archive(service, tmp_path):
-    client, _ = service
+    client, _, _ = service
     bad = tmp_path / "evil.tar.gz"
     with tarfile.open(bad, "w:gz") as tar:
         data = b"hacked"

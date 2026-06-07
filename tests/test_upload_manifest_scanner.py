@@ -1,4 +1,8 @@
-"""Tests for the service-side upload manifest scanner."""
+"""Tests for the service-side upload manifest scanner.
+
+All tests use raw-evidence manifest entries (head_hex, extension, mime) —
+the scanner performs its own webshell/PDF matching service-side.
+"""
 
 from __future__ import annotations
 
@@ -112,6 +116,25 @@ def test_webshell_gate_respected(ruleset):
     Gate is true when: dangerous extension fired, MIME mismatch fired, MIME is
     PHP/text-plain. Gate is false for a consistent benign image.
     """
+    php_code = b"<?php system($_GET['cmd']);"
+    scanner = UploadManifestScanner(ruleset)
+    # Entry with NO agent-precomputed fields — only raw evidence.
+    entry = {
+        "path": "uploads/backdoor.txt",
+        "filename": "backdoor.txt",
+        "extension": ".txt",
+        "detected_mime": "text/plain",
+        "head_hex": php_code.hex(),
+        # Deliberately NO webshell_signature_matches or pdf_active_markers.
+    }
+    findings = scanner.scan([entry])
+    ws = [f for f in findings if f.layer == "webshell_signature"]
+    assert ws, "scanner should detect webshell from head_hex without precomputed matches"
+
+
+def test_webshell_gate_respected_from_head_hex(ruleset):
+    """Webshell layer only fires when gate is satisfied (mirrors UploadScanner)."""
+    php_code = b"<?php eval(base64_decode('dGVzdA=='));"
     scanner = UploadManifestScanner(ruleset)
 
     # Consistent benign image (ext matches MIME) → gate false → no webshell.

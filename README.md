@@ -186,6 +186,10 @@ ojs-sast scan-bundle --source source.tar.gz --meta meta.json
 ojs-sast list-rules --module source_code
 ```
 
+> **Note:** The `ojs_sast/agent/` package has been removed from this repository.
+> The thin agent now lives in
+> [`Warwoyo/ojs-sast-agent`](https://github.com/Warwoyo/ojs-sast-agent).
+
 ---
 
 ## Testing
