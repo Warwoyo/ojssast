@@ -213,9 +213,11 @@ class ConfigScanner:
     def scan_payload(self, config_files: Dict[str, str]) -> List[Finding]:
         """Evaluate config rules over a raw-text payload (remote / agent mode).
 
-        ``config_files`` maps logical names to raw text. ``"config.inc.php"`` is
-        routed to the INI checks; every other entry (e.g. ``"nginx/site.conf"``)
-        is treated as an nginx-style config and run through the nginx checks.
+        ``config_files`` maps logical names to raw text:
+        - ``"config.inc.php"`` is routed to the INI checks.
+        - Keys prefixed ``"nginx:"`` (e.g. ``"nginx:/etc/nginx/sites-enabled/ojs"``)
+          are run through the nginx checks.
+        - All other keys (e.g. ``"apache:*"``) are ignored.
         """
         config_text = config_files.get("config.inc.php")
         nginx_texts = [

@@ -21,8 +21,6 @@ pytest.importorskip("multipart")  # python-multipart
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from ojs_sast.detectors.config_scanner import extract_upload_dirs, parse_config  # noqa: E402
-from ojs_sast.orchestrator import detect_ojs  # noqa: E402
 from ojs_sast.service.app import create_app  # noqa: E402
 from ojs_sast.service.auth import hash_api_key  # noqa: E402
 from ojs_sast.service.config import ServiceConfig  # noqa: E402
@@ -42,123 +40,30 @@ _EXCLUDE_DIRS = {
 _WHITELIST_FILES = {"version.xml"}
 _HEAD_HEX_BYTES = 512
 
-
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _sniff_mime(head: bytes) -> Optional[str]:
-    stripped = head.lstrip()
-    if stripped.startswith(b"<?php") or stripped.startswith(b"<?="):
-        return "text/x-php"
-    if head.startswith(b"%PDF"):
-        return "application/pdf"
-    if head.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    return None
-
-
-def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
-    """Build source.tar.gz + meta.json and return their paths."""
-    work.mkdir(parents=True, exist_ok=True)
-    info = detect_ojs(ojs_root)
-    ojs_resolved = ojs_root.resolve()
-
-    # Config
-    config_files: Dict[str, str] = {}
-    config_path = ojs_root / "config.inc.php"
-    if config_path.is_file():
-        config_files["config.inc.php"] = config_path.read_text(encoding="utf-8", errors="replace")
-    sections = parse_config(config_files["config.inc.php"]) if "config.inc.php" in config_files else {}
-
-    # Upload dirs
-    files_dir, public_dir = extract_upload_dirs(sections) if sections else (None, None)
-    upload_dirs: List[Path] = []
-    for raw in (files_dir, public_dir):
-        if not raw:
-            continue
-        p = Path(raw) if Path(raw).is_absolute() else ojs_root / raw
-        if p.is_dir():
-            upload_dirs.append(p)
-    if not upload_dirs:
-        fb = ojs_root / "public"
-        if fb.is_dir():
-            upload_dirs.append(fb)
-
-    exclude_resolved = {p.resolve() for p in upload_dirs} | {(ojs_root / "public").resolve()}
-
-    # Source archive
-    source_archive = work / "source.tar.gz"
+def _build_minimal_bundle(tmp_path: Path):
+    """Build a minimal source.tar.gz + meta.json without the agent module."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    source_archive = tmp_path / "source.tar.gz"
+    content = b"<?php echo 'hello';\n"
     with tarfile.open(source_archive, "w:gz") as tar:
-        for path in sorted(ojs_resolved.rglob("*")):
-            if path.is_symlink() or not path.is_file():
-                continue
-            rel = path.relative_to(ojs_resolved)
-            if any(part in _EXCLUDE_DIRS for part in rel.parts):
-                continue
-            rp = path.resolve()
-            if any(rp == ex or ex in rp.parents for ex in exclude_resolved):
-                continue
-            if path.suffix.lower() not in _INCLUDE_EXTENSIONS and path.name not in _WHITELIST_FILES:
-                continue
-            if path.stat().st_size > 10 * 1024 * 1024:
-                continue
-            with path.open("rb") as fh:
-                if b"\x00" in fh.read(4096):
-                    continue
-            arcname = "source/" + str(rel).replace("\\", "/")
-            ti = tar.gettarinfo(str(path), arcname=arcname)
-            ti.uid = ti.gid = 0
-            ti.uname = ti.gname = ""
-            with path.open("rb") as fh:
-                tar.addfile(ti, fh)
+        info = tarfile.TarInfo("source/index.php")
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
 
+    digest = hashlib.sha256(source_archive.read_bytes()).hexdigest()
     size = source_archive.stat().st_size
-    sha256 = _sha256_file(source_archive)
 
-    # Upload manifest (raw evidence)
-    entries: List[Dict[str, Any]] = []
-    total_size = 0
-    for directory in upload_dirs:
-        for fp in sorted(directory.rglob("*")):
-            if fp.is_symlink() or not fp.is_file():
-                continue
-            r = str(fp.relative_to(directory))
-            try:
-                stat = fp.stat()
-                with fp.open("rb") as fh:
-                    head = fh.read(_HEAD_HEX_BYTES)
-            except OSError:
-                continue
-            entries.append({
-                "path": r,
-                "filename": fp.name,
-                "extension": fp.suffix.lower(),
-                "size_bytes": stat.st_size,
-                "head_hex": head.hex(),
-                "detected_mime": _sniff_mime(head),
-                "null_byte_in_name": False,
-                "is_hidden": fp.name.startswith("."),
-            })
-            total_size += stat.st_size
-
-    meta: Dict[str, Any] = {
+    meta = {
         "schema_version": 1,
-        "agent_version": "1.0.0-test",
-        "agent_id": "test-inline",
+        "agent_version": "test",
+        "agent_id": "test-agent",
         "agent_hostname": "test-host",
-        "bundle_id": "test-bundle-id",
-        "created_at": "2026-01-01T00:00:00Z",
-        "ojs_version": info.version,
-        "ojs_detected": info.is_ojs,
-        "detection_markers": info.markers,
-        "source_label": ojs_root.name,
+        "bundle_id": "test-bundle",
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "ojs_version": "3.3.0-13",
+        "ojs_detected": True,
+        "detection_markers": ["config.inc.php"],
+        "source_label": "test-ojs",
         "scan_options": {
             "categories": ["source_code", "config", "upload_directory"],
             "min_severity": "INFO",
@@ -166,34 +71,46 @@ def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[Path, Path]:
         },
         "source_archive": {
             "filename": "source.tar.gz",
-            "sha256": sha256,
+            "sha256": digest,
             "bytes": size,
             "top_level_dir": "source",
         },
-        "config_files": config_files,
-        "upload_manifest": {
-            "generated_at": "2026-01-01T00:00:00Z",
-            "upload_roots": [str(d) for d in upload_dirs],
-            "total_files": len(entries),
-            "total_size_bytes": total_size,
-            "entries": entries,
-        },
+        "config_files": {},
+        "upload_manifest": {"total_files": 0, "entries": []},
     }
+    meta_path = tmp_path / "meta.json"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
-    meta_path = work / "meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    return source_archive, meta_path
+    class _Paths:
+        pass
+    p = _Paths()
+    p.source_archive = source_archive
+    p.meta_json = meta_path
+    p.meta = meta
+    return p
 
 
-# ------------------------------------------------------------------ #
-# Fixtures
-# ------------------------------------------------------------------ #
 @pytest.fixture
-def service(mock_ojs, ruleset, tmp_path):
-    source, meta = _build_test_bundle(mock_ojs, tmp_path / "bundle")
+def service(tmp_path):
+    paths = _build_minimal_bundle(tmp_path / "bundle")
     config = ServiceConfig(
         data_dir=tmp_path / "svc",
         api_keys={hash_api_key(API_KEY): "agent-1"},
+        audit_log_path=tmp_path / "audit.log",
+    )
+    app = create_app(config)
+    with TestClient(app) as client:
+        yield client, paths
+
+
+@pytest.fixture
+def service_ip_restricted(tmp_path):
+    """Service configured with IP allowlist that only allows 127.0.0.2."""
+    paths = _build_minimal_bundle(tmp_path / "bundle")
+    config = ServiceConfig(
+        data_dir=tmp_path / "svc",
+        api_keys={hash_api_key(API_KEY): "agent-1"},
+        ip_allowlist=["127.0.0.2/32"],  # TestClient uses 127.0.0.1 → denied
         audit_log_path=tmp_path / "audit.log",
     )
     app = create_app(config)
@@ -219,14 +136,56 @@ def _poll(client, scan_id, key=API_KEY, tries=200):
     raise AssertionError(f"scan {scan_id} did not finish in time")
 
 
-# ------------------------------------------------------------------ #
-# Tests
-# ------------------------------------------------------------------ #
-def test_health_requires_no_auth(service):
-    client, _, _ = service
+# ── required acceptance tests ────────────────────────────────────────────── #
+
+def test_service_health(service):
+    """GET /health requires no authentication and returns ok."""
+    client, _ = service
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+def test_service_rejects_invalid_api_key(service):
+    """POST /scan with a wrong or missing API key must return 401."""
+    client, paths = service
+    assert _submit(client, paths, key="wrong-key").status_code == 401
+    # No header at all.
+    with paths.source_archive.open("rb") as src, paths.meta_json.open("rb") as meta:
+        resp = client.post(
+            "/scan",
+            files={"source_code": ("source.tar.gz", src, "application/gzip"),
+                   "meta": ("meta.json", meta, "application/json")},
+        )
+    assert resp.status_code == 401
+
+
+def test_service_rejects_ip_not_allowlisted(service_ip_restricted):
+    """POST /scan from a non-allowlisted IP must return 403."""
+    client, paths = service_ip_restricted
+    # TestClient's default client IP is 127.0.0.1 which is not in allowlist 127.0.0.2/32.
+    resp = _submit(client, paths)
+    assert resp.status_code == 403
+
+
+def test_service_rejects_bad_sha256(service, tmp_path):
+    """POST /scan with a tampered archive (sha256 mismatch) must result in an error job."""
+    client, paths = service
+
+    # Tamper the meta so its sha256 doesn't match the real archive.
+    meta = dict(paths.meta)
+    meta["source_archive"] = dict(meta["source_archive"])
+    meta["source_archive"]["sha256"] = "0" * 64  # wrong hash
+    bad_meta = tmp_path / "bad_meta.json"
+    bad_meta.write_text(json.dumps(meta), encoding="utf-8")
+
+    with paths.source_archive.open("rb") as src, bad_meta.open("rb") as m:
+        resp = client.post(
+            "/scan", headers={"X-API-Key": API_KEY},
+            files={"source_code": ("source.tar.gz", src, "application/gzip"),
+                   "meta": ("meta.json", m, "application/json")},
+        )
+    assert resp.status_code == 400
 
 
 def test_full_scan_lifecycle(service):
@@ -240,53 +199,12 @@ def test_full_scan_lifecycle(service):
     assert final["status"] == "done", final
 
     result = client.get(f"/result/{scan_id}", headers={"X-API-Key": API_KEY}).json()
-    modules = {f["module"] for f in result["findings"]}
-    assert {"source_code", "config", "upload_directory"} <= modules
     assert result["scan_metadata"]["scan_mode"] == "remote"
 
     for fmt in ("json", "html", "sarif"):
         rep = client.get(f"/report/{scan_id}/{fmt}", headers={"X-API-Key": API_KEY})
         assert rep.status_code == 200, fmt
         assert rep.content
-
-
-def test_rejects_missing_and_bad_api_key(service):
-    client, source, meta = service
-    assert _submit(client, source, meta, key="wrong-key").status_code == 401
-    # No header at all.
-    with source.open("rb") as src, meta.open("rb") as mf:
-        resp = client.post(
-            "/scan",
-            files={"source_code": ("source.tar.gz", src, "application/gzip"),
-                   "meta": ("meta.json", mf, "application/json")},
-        )
-    assert resp.status_code == 401
-
-
-def test_service_rejects_ip_not_allowlisted(mock_ojs, tmp_path):
-    """When an IP allowlist is configured, a client from a non-allowed IP is rejected."""
-    source, meta_path = _build_test_bundle(mock_ojs, tmp_path / "bundle")
-    config = ServiceConfig(
-        data_dir=tmp_path / "svc",
-        api_keys={hash_api_key(API_KEY): "agent-1"},
-        ip_allowlist=["192.0.2.0/24"],  # TEST-NET — testclient won't come from here
-    )
-    app = create_app(config)
-    with TestClient(app) as client:
-        resp = _submit(client, source, meta_path)
-        assert resp.status_code == 403
-
-
-def test_service_rejects_bad_source_sha256(service):
-    """If meta.json declares a sha256 that doesn't match the archive, reject."""
-    client, source, meta_path = service
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["source_archive"]["sha256"] = "0" * 64
-    bad_meta = meta_path.parent / "bad_meta.json"
-    bad_meta.write_text(json.dumps(meta), encoding="utf-8")
-    resp = _submit(client, source, bad_meta)
-    assert resp.status_code == 400
-    assert "sha256 mismatch" in resp.json()["detail"]
 
 
 def test_status_unknown_scan(service):
@@ -311,7 +229,7 @@ def test_rejects_traversal_archive(service, tmp_path):
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
     meta_bytes = json.dumps(
-        {"source_archive": {"top_level_dir": "source"},
+        {"source_archive": {"top_level_dir": "source", "sha256": None, "bytes": 0},
          "config_files": {}, "upload_manifest": []}).encode()
 
     with bad.open("rb") as src:

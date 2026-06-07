@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ojs-sast"
 version = "1.0.0"
-description = "OJS-aware Extended Static Application Security Testing (SAST) CLI for scanning Open Journal Systems deployments"
+description = "OJS-aware Extended SAST core and remote SAST service for Open Journal Systems"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

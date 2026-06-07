@@ -104,12 +104,23 @@ def load_upload_layer_params(ruleset: Ruleset) -> UploadLayerParams:
     )
 
 
+def _head_bytes(entry: dict) -> bytes:
+    """Decode ``head_hex`` from a manifest entry into raw bytes (empty on error)."""
+    raw = entry.get("head_hex") or ""
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        return b""
+
+
 class UploadManifestScanner:
     """Scan upload *manifest entries* and emit upload-directory findings.
 
-    All five detection layers run entirely service-side.  The agent only supplies
-    raw evidence (``head_hex``, ``extension``, ``filename``, ``detected_mime``);
-    the scanner performs signature / keyword matching itself from ``head_hex``.
+    Webshell signatures (layer 4) and PDF active-content markers (layer 5)
+    are computed from the ``head_hex`` field in each entry — raw bytes from
+    the file's header, encoded as a hex string by the agent. The scanner does
+    NOT read pre-computed ``webshell_signature_matches`` or ``pdf_active_markers``
+    fields; those are ignored if present for backward compatibility.
     """
 
     def __init__(self, ruleset: Ruleset, verbose: bool = False,
@@ -132,7 +143,7 @@ class UploadManifestScanner:
         self.php_mimes = params.php_mimes
         self.exec_mimes = params.exec_mimes
         self.expected_mime = params.expected_mime
-        # Service-side signature / keyword data (used by layers 4 & 5).
+        # Webshell signature patterns and PDF keyword tokens (used in layers 4/5).
         self.signatures = params.signatures
         self.pdf_keywords = params.pdf_keywords
 
@@ -176,14 +187,21 @@ class UploadManifestScanner:
             l3 = self._layer_mime_mismatch(rel, ext, mime)
             findings.extend(l3)
 
-            # Layer 4: webshell signatures — run service-side from head_hex.
+            # Layer 4: webshell signatures from head_hex bytes (gated).
             gate = bool(l1) or bool(l3) or (mime in self.php_mimes) or (mime in ("text/plain",))
             if gate:
+                head = _head_bytes(entry)
                 findings.extend(self._layer_webshell_from_head(rel, ext, mime, head))
 
-            # Layer 5: malicious PDF — run service-side from head_hex.
+            # Layer 5: malicious PDF active-content markers from head_hex bytes.
+            # Supports optional "pdf_sample_hex" for a larger PDF sample window.
             if ext == ".pdf" or mime == "application/pdf":
-                findings.extend(self._layer_pdf_from_head(rel, ext, mime, head))
+                raw_hex = entry.get("pdf_sample_hex") or entry.get("head_hex") or ""
+                try:
+                    pdf_head = bytes.fromhex(raw_hex)
+                except ValueError:
+                    pdf_head = b""
+                findings.extend(self._layer_pdf_from_head(rel, ext, mime, pdf_head))
 
         logger.info("Upload manifest scan complete: %d entries, %d findings",
                     self.files_scanned, len(findings))
@@ -265,16 +283,14 @@ class UploadManifestScanner:
                              f"'{mime}'.", Severity.MEDIUM, mime, ext)]
         return []
 
-    # -- Service-side signature / keyword matching from head_hex ----------- #
+    # -- Layers 4 & 5: detection from head_hex bytes (computed service-side) -- #
     def _layer_webshell_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
-        """Match webshell signatures against decoded head bytes."""
-        if not head:
-            return []
+        """Match compiled webshell signature patterns against the head bytes."""
         text = head.decode("utf-8", "replace")
-        matches: List[str] = []
-        for sig_id, pattern, detail in self.signatures:
+        matches = []
+        for _sig_id, pattern, detail in self.signatures:
             if pattern.search(text):
-                matches.append(detail or sig_id)
+                matches.append(detail or _sig_id)
         if not matches:
             return []
         shown = matches[:5]
@@ -284,10 +300,8 @@ class UploadManifestScanner:
                          Severity.CRITICAL, mime, ext, fallback_cwe="CWE-94")]
 
     def _layer_pdf_from_head(self, rel, ext, mime, head: bytes) -> List[Finding]:
-        """Match malicious-PDF keywords against decoded head bytes."""
-        if not head:
-            return []
-        found: List[str] = []
+        """Scan head bytes for PDF active-content keyword tokens."""
+        found = []
         for token, detail in self.pdf_keywords:
             if token.encode("latin-1", "ignore") in head:
                 found.append(detail or token)

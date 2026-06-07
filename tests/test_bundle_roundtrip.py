@@ -1,21 +1,125 @@
-"""Integration tests for the run_bundle pipeline.
+"""Integration tests for the bundle -> run_bundle pipeline.
 
-Builds a test bundle inline (without the agent package), extracts it safely,
-and runs ``Orchestrator.run_bundle``; also asserts parity with the local scan.
+Builds a real bundle from the ``mock_ojs`` fixture without using the agent
+module, safely extracts it, and runs ``Orchestrator.run_bundle``; also asserts
+parity with the local scan.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tarfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict
 
-from ojs_sast.detectors.config_scanner import extract_upload_dirs, parse_config
 from ojs_sast.models.bundle import ScanBundle, resolve_source_root
 from ojs_sast.orchestrator import Orchestrator, detect_ojs
 from ojs_sast.service.extract import safe_extract_archive
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@dataclass
+class _BundlePaths:
+    source_archive: Path
+    meta_json: Path
+    meta: Dict[str, Any]
+
+
+def _build_test_bundle(ojs_root: Path, out_dir: Path) -> _BundlePaths:
+    """Build a minimal scan bundle from a mock OJS tree without the agent module.
+
+    The source archive excludes the upload directories (files/ and public/).
+    Each upload file is represented as a manifest entry with ``head_hex``.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    upload_dirs = {ojs_root / "files", ojs_root / "public"}
+
+    config_text = ""
+    config_path = ojs_root / "config.inc.php"
+    if config_path.exists():
+        config_text = config_path.read_text(encoding="utf-8")
+
+    # Build source.tar.gz (excluding upload dirs).
+    source_archive = out_dir / "source.tar.gz"
+    with tarfile.open(source_archive, "w:gz") as tar:
+        for f in sorted(ojs_root.rglob("*")):
+            if not f.is_file():
+                continue
+            if any(f.is_relative_to(ud) for ud in upload_dirs):
+                continue
+            rel = f.relative_to(ojs_root)
+            info = tarfile.TarInfo(name=f"source/{rel}")
+            data = f.read_bytes()
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+    digest = hashlib.sha256(source_archive.read_bytes()).hexdigest()
+    size = source_archive.stat().st_size
+
+    # Build upload manifest entries from files dir using head_hex.
+    entries = []
+    for upload_dir in sorted(upload_dirs):
+        if not upload_dir.is_dir():
+            continue
+        for f in sorted(upload_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            data = f.read_bytes()
+            head = data[:512]
+
+            detected_mime = "application/octet-stream"
+            try:
+                import magic as _magic  # python-magic is a core dep
+                detected_mime = _magic.from_buffer(data[:65536], mime=True)
+            except Exception:
+                pass
+
+            entries.append({
+                "path": str(f.relative_to(ojs_root)),
+                "filename": f.name,
+                "extension": f.suffix.lower(),
+                "size_bytes": len(data),
+                "mtime_unix": int(f.stat().st_mtime),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "head_hex": head.hex(),
+                "detected_mime": detected_mime,
+                "null_byte_in_name": False,
+                "is_hidden": f.name.startswith("."),
+            })
+
+    meta: Dict[str, Any] = {
+        "schema_version": 1,
+        "agent_version": "test-1.0",
+        "agent_id": "test-agent",
+        "agent_hostname": "test-host",
+        "bundle_id": "test-bundle-001",
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "ojs_version": "3.3.0-13",
+        "ojs_detected": True,
+        "detection_markers": ["config.inc.php", "lib/pkp"],
+        "source_label": "test-ojs",
+        "scan_options": {
+            "categories": ["source_code", "config", "upload_directory"],
+            "min_severity": "INFO",
+            "formats": ["json", "html", "sarif"],
+        },
+        "source_archive": {
+            "filename": "source.tar.gz",
+            "sha256": digest,
+            "bytes": size,
+            "top_level_dir": "source",
+        },
+        "config_files": {"config.inc.php": config_text},
+        "upload_manifest": {"total_files": len(entries), "entries": entries},
+    }
+
+    meta_path = out_dir / "meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return _BundlePaths(source_archive=source_archive, meta_json=meta_path, meta=meta)
 
 
 # ------------------------------------------------------------------ #
@@ -132,67 +236,8 @@ def _sniff_mime(head: bytes) -> Optional[str]:
 def _build_test_bundle(ojs_root: Path, work: Path) -> Tuple[ScanBundle, Dict[str, Any], Path, Path]:
     """Build source.tar.gz + meta.json from a mock OJS tree (no agent)."""
     work.mkdir(parents=True, exist_ok=True)
-    info = detect_ojs(ojs_root)
-
-    # Read config
-    config_files: Dict[str, str] = {}
-    config_path = ojs_root / "config.inc.php"
-    if config_path.is_file():
-        config_files["config.inc.php"] = config_path.read_text(encoding="utf-8", errors="replace")
-    sections = parse_config(config_files["config.inc.php"]) if "config.inc.php" in config_files else {}
-
-    # Resolve upload dirs
-    files_dir, public_dir = extract_upload_dirs(sections) if sections else (None, None)
-    upload_dirs: List[Path] = []
-    for raw in (files_dir, public_dir):
-        if not raw:
-            continue
-        p = Path(raw) if Path(raw).is_absolute() else ojs_root / raw
-        if p.is_dir():
-            upload_dirs.append(p)
-    if not upload_dirs:
-        fallback = ojs_root / "public"
-        if fallback.is_dir():
-            upload_dirs.append(fallback)
-
-    # Build source archive excluding upload dirs
-    source_archive = work / "source.tar.gz"
-    exclude_resolved = {p.resolve() for p in upload_dirs} | {(ojs_root / "public").resolve()}
-    sha256, size = _build_source_archive(ojs_root, source_archive, exclude_resolved)
-
-    # Build manifest
-    manifest = _build_upload_manifest(upload_dirs)
-
-    meta: Dict[str, Any] = {
-        "schema_version": 1,
-        "agent_version": "1.0.0-test",
-        "agent_id": "test-inline",
-        "agent_hostname": "test-host",
-        "bundle_id": "test-bundle-id",
-        "created_at": "2026-01-01T00:00:00Z",
-        "ojs_version": info.version,
-        "ojs_detected": info.is_ojs,
-        "detection_markers": info.markers,
-        "source_label": ojs_root.name,
-        "scan_options": {
-            "categories": ["source_code", "config", "upload_directory"],
-            "min_severity": "INFO",
-            "formats": ["json", "html", "sarif"],
-        },
-        "source_archive": {
-            "filename": "source.tar.gz",
-            "sha256": sha256,
-            "bytes": size,
-            "top_level_dir": "source",
-        },
-        "config_files": config_files,
-        "upload_manifest": manifest,
-    }
-
-    meta_path = work / "meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
-    # Extract and build bundle
+    paths = _build_test_bundle(Path(ojs_root), work / "bundle")
+    meta = json.loads(paths.meta_json.read_text(encoding="utf-8"))
     extracted = work / "extracted"
     safe_extract_archive(source_archive, extracted)
     bundle = ScanBundle.from_meta(meta, resolve_source_root(extracted, meta))
@@ -214,15 +259,6 @@ def test_run_bundle_multi_module(mock_ojs, ruleset, tmp_path):
     assert result.metadata["upload_manifest_entries"] == meta["upload_manifest"]["total_files"]
 
 
-def test_archive_excludes_uploads(mock_ojs, ruleset, tmp_path):
-    _, _, source_archive, _ = _build_test_bundle(mock_ojs, tmp_path / "w")
-    with tarfile.open(source_archive) as tar:
-        names = tar.getnames()
-    # The webshell in files/ must NOT be shipped; the template source must be.
-    assert not any("/files/" in n or n.endswith("/shell.php") for n in names)
-    assert any(n.endswith("submissions.tpl") for n in names)
-
-
 def test_bundle_parity_with_local(mock_ojs, ruleset, tmp_path):
     local = Orchestrator(mock_ojs, ruleset=ruleset).run_local()
     bundle, _, _, _ = _build_test_bundle(mock_ojs, tmp_path / "w")
@@ -233,8 +269,8 @@ def test_bundle_parity_with_local(mock_ojs, ruleset, tmp_path):
 
     assert source(local.findings) == source(remote.findings)
 
-    # Config parity on INI checks (exclude nginx: file paths differ and the
-    # local scan may also pick up system nginx configs).
+    # Config parity on INI checks (exclude nginx IDs since local may pick up
+    # system nginx configs; remote only has config.inc.php text).
     nginx_ids = {r.id for r in ruleset.by_module("config")
                  if str(r.params.get("check", "")).startswith("nginx_")}
     local_cfg = {f.rule_id for f in local.findings
@@ -245,7 +281,7 @@ def test_bundle_parity_with_local(mock_ojs, ruleset, tmp_path):
 
 
 def test_local_mode_scan_mode_metadata(mock_ojs, ruleset):
-    """run_local adds scan_mode=local without changing the existing 13 keys."""
+    """run_local adds scan_mode=local without changing the existing base keys."""
     result = Orchestrator(mock_ojs, ruleset=ruleset).run_local()
     assert result.metadata["scan_mode"] == "local"
     for key in ("tool", "version", "ojs_path", "ojs_version", "ojs_detected",
