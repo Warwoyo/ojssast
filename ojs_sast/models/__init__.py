@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+
+# A rule id that embeds a real CVE number (e.g. "OJS-CVE-2023-5626") identifies a
+# ground-truth detection regardless of the surrounding naming scheme.
+_EMBEDDED_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
 
 
 class Severity(Enum):
@@ -137,6 +142,21 @@ def resolve_rule_metadata(rule_id: str, params: Optional[Dict[str, Any]] = None)
         metadata.update(ground_truth=False, evaluation_scope="upload")
     elif rule_id.startswith("RULE-SRC-"):
         metadata.update(ground_truth=False, evaluation_scope="generic")
+
+    # Fallback: a CVE rule that does not adopt a recognised ID prefix (e.g. a
+    # ruleset renamed to "OJS-CVE-2023-5626") is still a ground-truth detection.
+    # Infer it from the rule's own identity/params so ground-truth tagging is not
+    # coupled to the ID naming scheme. Only applied when no prefix classified the
+    # rule, so existing CVE-SRC-/OJS-CFG-/RULE-* behaviour is unchanged.
+    if metadata["ground_truth"] is None and metadata["evaluation_scope"] is None:
+        is_cve_rule = bool(
+            _EMBEDDED_CVE_RE.search(rule_id)
+            or params.get("cve_id")
+            or params.get("cve_references")
+            or str(params.get("pattern_type", "")).lower() == "cve"
+        )
+        if is_cve_rule:
+            metadata.update(ground_truth=True, evaluation_scope="ground_truth")
 
     for key in ("ground_truth", "evaluation_scope", "rule_origin", "rule_family"):
         if key in params and params[key] is not None:
