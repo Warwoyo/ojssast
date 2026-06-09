@@ -103,6 +103,20 @@ class CVEScanner:
         self._host_header = _HostHeaderDetector()
         self._deserialization = _DeserializationDetector()
 
+        # Surface rules whose vulnerability_type maps to no detector. Such a rule
+        # loads cleanly but can never produce a finding, so a silently-dropped
+        # rule (e.g. an unrecognised type from a converted ruleset) would otherwise
+        # look like a false negative. Reported once at init instead of per-file.
+        self.unroutable_rules: List[Tuple[str, str]] = []
+        for r in self.cve_rules:
+            vt = r.params.get("vulnerability_type", "")
+            if self._select_detector(vt, "probe.php") is None:
+                self.unroutable_rules.append((r.id, str(vt)))
+                logger.warning(
+                    "CVE rule %s: vulnerability_type %r is not recognised by any "
+                    "detector; this rule will never produce findings", r.id, vt,
+                )
+
     # ------------------------------------------------------------------ #
     # Detector dispatch
     # ------------------------------------------------------------------ #
@@ -241,6 +255,14 @@ class _BaseDetector:
         """Search for any of ``patterns`` in ``source`` (or ``scope``).
 
         Returns (matched_pattern, line_number, snippet) or None.
+
+        Each pattern is first matched line-by-line (the fast path, which keeps the
+        original snippet/line behaviour). If that misses, a multiline DOTALL search
+        is attempted so a pattern whose match legitimately spans several lines —
+        e.g. a function call broken across lines like
+        ``setServerFileName(\\n    $o->textContent\\n)`` — is still detected. The
+        previous line-only behaviour silently missed every multi-line construct,
+        diverging from structural matchers such as Semgrep.
         """
         text = scope if scope else source
         for pat in patterns:
@@ -253,6 +275,18 @@ class _BaseDetector:
                         if snippet in line:
                             line_no = i
                             break
+                return pat, line_no, snippet
+            # Multiline fallback: the pattern may span lines (whitespace/newlines
+            # between tokens). Only reached when the line-by-line search missed, so
+            # single-line matches keep their exact prior line/snippet.
+            span = find_pattern_span(text, pat, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            if span:
+                snippet = (span.snippet or "").splitlines()[0].strip() if span.snippet else ""
+                line_no = span.line_start
+                if scope:
+                    base = source.find(scope)
+                    if base != -1:
+                        line_no = source.count("\n", 0, base) + span.line_start
                 return pat, line_no, snippet
         return None
 

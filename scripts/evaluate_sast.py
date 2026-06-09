@@ -18,7 +18,10 @@ from ojs_sast.models import resolve_rule_metadata
 
 DEFAULT_RULESET_DIR = REPO_ROOT / "ojs_sast" / "ruleset"
 
-RULE_ID_RE = re.compile(r"\b(?:OJS-CFG|CVE-SRC|RULE-SRC|RULE-UPLOAD)-[A-Z0-9_-]+\b")
+# Rule-id families recognised in ground-truth text. ``OJS-CVE`` covers CVE
+# rulesets that keep the CVE number in the id instead of the ``CVE-SRC`` scheme,
+# so a renamed-but-equivalent ruleset is not silently scored 0%.
+RULE_ID_RE = re.compile(r"\b(?:OJS-CFG|OJS-CVE|CVE-SRC|RULE-SRC|RULE-UPLOAD)-[A-Z0-9_-]+\b")
 CVE_ID_RE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
 STRICT_EXCLUDED_RULE_IDS = {"RULE-SRC-010", "RULE-SRC-011", "RULE-SRC-012"}
 STRICT_EXCLUDED_PREFIXES = ("RULE-UPLOAD-", "OJS-CFG-NGX-", "OJS-CFG-EXT-")

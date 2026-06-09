@@ -121,6 +121,91 @@ def _is_lower_bound(spec: str) -> bool:
     return spec.strip().startswith((">=", ">"))
 
 
+# An operator bound parsed into ``(operator, parsed_version)``.
+_Bound = Tuple[str, Tuple[int, ...]]
+
+
+def _spec_bound(spec: str) -> Optional[_Bound]:
+    """Parse an operator spec (``>=``/``>``/``<=``/``<``) into ``(op, version)``.
+
+    Returns ``None`` for bare prefix/exact specs such as ``"3.3.0"`` so the caller
+    can evaluate them independently.
+    """
+    spec = spec.strip()
+    for op in (">=", "<=", ">", "<"):
+        if spec.startswith(op):
+            return op, parse_version(_normalize_spec_version(spec, op))
+    return None
+
+
+def _in_range(det: Tuple[int, ...], lo: Optional[_Bound], hi: Optional[_Bound]) -> bool:
+    """Return True if ``det`` satisfies a single ``[lo, hi]`` range (AND of bounds).
+
+    A missing bound is treated as unbounded on that side.
+    """
+    if lo is not None:
+        op, v = lo
+        if op == ">=" and not det >= v:
+            return False
+        if op == ">" and not det > v:
+            return False
+    if hi is not None:
+        op, v = hi
+        if op == "<=" and not det <= v:
+            return False
+        if op == "<" and not det < v:
+            return False
+    return True
+
+
+def _evaluate_affected_specs(
+    detected: str, det: Tuple[int, ...], affected_specs: List[str]
+) -> Tuple[bool, str]:
+    """Interpret a flat affected-version spec list as a UNION of ``[floor, ceiling]``
+    ranges (disjunctive normal form).
+
+    Each ceiling (``<`` / ``<=``) closes a range opened by the most recent floor
+    (``>=`` / ``>``); a floor with no following ceiling stays open-ended. This
+    makes a multi-branch list such as ``['<3.3.0-16', '>=3.4.0', '<3.4.0-4']`` read
+    as ``(<3.3.0-16) OR (>=3.4.0 AND <3.4.0-4)`` instead of AND-ing every floor —
+    the latter previously excluded the whole 3.3.x branch as soon as a later branch
+    contributed its own ``>=`` floor. A single floor+ceiling pair (e.g. a contiguous
+    config range ``['>=3.3.0', '<3.6.0']``) collapses to one range, preserving the
+    earlier behaviour. Bare prefix/exact specs (``'3.3.0'``) are evaluated
+    independently with OR semantics.
+    """
+    ranges: List[Tuple[Optional[_Bound], Optional[_Bound]]] = []
+    standalone: List[str] = []
+    cur_floor: Optional[_Bound] = None
+
+    for spec in affected_specs:
+        bound = _spec_bound(spec)
+        if bound is None:
+            standalone.append(spec.strip())
+            continue
+        if bound[0] in (">=", ">"):
+            if cur_floor is not None:
+                # Two floors in a row: the previous one had no ceiling (open range).
+                ranges.append((cur_floor, None))
+            cur_floor = bound
+        else:  # "<" / "<="
+            ranges.append((cur_floor, bound))
+            cur_floor = None
+    if cur_floor is not None:
+        ranges.append((cur_floor, None))
+
+    for lo, hi in ranges:
+        if _in_range(det, lo, hi):
+            return True, f"detected {detected} matches affected range in {affected_specs}"
+
+    for spec in standalone:
+        reason = _matches_affected_spec(detected, det, spec)
+        if reason:
+            return True, reason
+
+    return False, f"detected {detected} is not in affected ranges {affected_specs}"
+
+
 def is_version_affected(
     detected: Optional[str],
     affected_specs: Optional[List[str]],
@@ -140,39 +225,18 @@ def is_version_affected(
     det = parse_version(detected)
     det_branch = version_branch(det)
 
-    affected_match_reasons: List[str] = []
+    # Interpret ``affected_specs`` as a union of per-branch [floor, ceiling] ranges
+    # (see :func:`_evaluate_affected_specs`). This keeps contiguous single-range
+    # specs working while correctly handling multi-branch lists, which the previous
+    # "all floors AND-required" rule mishandled (a later branch's ``>=`` floor would
+    # wrongly exclude every earlier affected branch).
     if affected_specs:
-        # Lower bounds (``>=`` / ``>``) are AND-required: they define the floor of
-        # a contiguous affected range (e.g. ``[">=3.3.0", "<3.6.0"]`` reads as
-        # ``>=3.3.0`` *and* ``<3.6.0``). Upper/exact/prefix bounds keep OR
-        # semantics so a list of per-branch ceilings
-        # (``["<=3.3.0-21", "<=3.4.0-9"]``) still matches any affected branch.
-        # Rules without a lower bound behave exactly as before (backward compatible).
-        lower_specs = [s for s in affected_specs if _is_lower_bound(s)]
-        other_specs = [s for s in affected_specs if not _is_lower_bound(s)]
-
-        lower_ok = all(
-            _matches_affected_spec(detected, det, spec) is not None for spec in lower_specs
-        )
-        if other_specs:
-            for spec in other_specs:
-                match_reason = _matches_affected_spec(detected, det, spec)
-                if match_reason:
-                    affected_match_reasons.append(match_reason)
-            other_ok = bool(affected_match_reasons)
-        else:
-            other_ok = True
-            affected_match_reasons.append("no upper-bound constraints")
-
-        if lower_specs:
-            affected_match_reasons.append(f"satisfies floor {', '.join(lower_specs)}")
-        matches_affected = lower_ok and other_ok
+        matches_affected, affected_reason = _evaluate_affected_specs(detected, det, affected_specs)
     else:
-        matches_affected = True
-        affected_match_reasons.append("no affected-version constraints defined")
+        matches_affected, affected_reason = True, "no affected-version constraints defined"
 
     if not matches_affected:
-        return False, f"detected {detected} is not in affected ranges {affected_specs}"
+        return False, affected_reason
 
     same_branch_patches: List[Tuple[str, Tuple[int, ...]]] = []
     other_branch_patches: List[str] = []
