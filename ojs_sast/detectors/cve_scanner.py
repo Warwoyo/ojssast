@@ -57,6 +57,35 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 _WILDCARD_SCOPE = {None, "", "*"}
 
 
+def _collect_scope_names(
+    params: Dict[str, Any], single_key: str, list_key: str,
+) -> List[str]:
+    """Merge a singular + plural ruleset scope key into one ordered name list.
+
+    A rule may pin a scope with either a single value (``function_name: init``)
+    or — to cover OJS versions that renamed the symbol — a list of alternatives
+    (``function_names: [init, initPlugin]``). Both forms are honoured for
+    ``function_name(s)`` and ``class_name(s)`` and treated as OR alternatives.
+    The singular value is tried first so existing single-name rules keep their
+    exact prior behaviour.
+
+    Wildcard / empty sentinels (``*``, ``""``, ``None``) carry no concrete name
+    and are dropped, so an all-wildcard scope yields ``[]`` (no restriction).
+    Order is preserved and duplicates removed.
+    """
+    names: List[str] = []
+    single = params.get(single_key)
+    if single is not None and single not in _WILDCARD_SCOPE:
+        names.append(str(single))
+    for raw in params.get(list_key, []) or []:
+        if raw is None or raw in _WILDCARD_SCOPE:
+            continue
+        name = str(raw)
+        if name not in names:
+            names.append(name)
+    return names
+
+
 # --------------------------------------------------------------------------- #
 # CVE Scanner Engine
 # --------------------------------------------------------------------------- #
@@ -359,22 +388,28 @@ class _BaseDetector:
         )
 
     @staticmethod
-    def _function_scope(source: str, fn_name: Optional[str]) -> Tuple[Optional[str], bool]:
-        """Resolve an optional function scope.
+    def _resolve_function_scope(
+        source: str, params: Dict[str, Any],
+    ) -> Tuple[Optional[str], bool]:
+        """Resolve an optional function scope honouring alternative names.
 
-        Returns ``(scope, bail)``:
-        * wildcard / missing ``function_name`` → ``(None, False)`` (analyse the
-          whole file — no scope restriction);
-        * a concrete function name that exists → ``(body, False)``;
-        * a concrete function name that is absent → ``(None, True)`` so the
-          caller can bail out (the rule targets a function this file lacks).
+        Reads both ``function_name`` (str) and ``function_names`` (list) and
+        treats them as OR alternatives, so a single rule can span OJS versions
+        that renamed the function. Returns ``(scope, bail)``:
+        * no concrete names (all wildcard / missing) → ``(None, False)``: analyse
+          the whole file, no scope restriction;
+        * at least one alternative exists in the file → ``(body, False)``;
+        * concrete names given but NONE present → ``(None, True)`` so the caller
+          can bail out (the rule targets a function this file lacks).
         """
-        if fn_name in _WILDCARD_SCOPE:
+        names = _collect_scope_names(params, "function_name", "function_names")
+        if not names:
             return None, False
-        body = extract_function_body(source, fn_name)
-        if body is None:
-            return None, True
-        return body, False
+        for name in names:
+            body = extract_function_body(source, name)
+            if body is not None:
+                return body, False
+        return None, True
 
     def _standard_evaluate(
         self,
@@ -449,7 +484,7 @@ class _SQLiDetector(_BaseDetector):
     """Detect SQL injection CVEs (e.g. CVE-2025-67889)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        scope, bail = self._resolve_function_scope(source, rule.params)
         if bail:
             return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
@@ -460,20 +495,36 @@ class _CSRFDetector(_BaseDetector):
 
     def evaluate(self, rule, rel, source, ojs_version):
         params = rule.params
-        class_name = params.get("class_name")
-        fn_name = params.get("function_name")
-        scope = None
+        # class_name(s) / function_name(s) are OR alternatives so a rule still
+        # applies to OJS versions that renamed the class or method. A wildcard
+        # ("*") class/function contributes no name and so imposes no restriction
+        # (previously a "*" class_name wrongly bailed out with no finding).
+        class_names = _collect_scope_names(params, "class_name", "class_names")
+        fn_names = _collect_scope_names(params, "function_name", "function_names")
 
-        if class_name:
-            class_body = extract_class_body(source, class_name)
-            if class_body is None:
-                return None
-            if fn_name:
-                scope = extract_function_body(class_body, fn_name)
-                if scope is None:
-                    return None
-            else:
-                scope = class_body
+        scope = None
+        matched_class: Optional[str] = None
+        matched_fn: Optional[str] = None
+        base = source
+
+        if class_names:
+            for cn in class_names:
+                class_body = extract_class_body(source, cn)
+                if class_body is not None:
+                    base, matched_class = class_body, cn
+                    break
+            if matched_class is None:
+                return None  # none of the alternative classes are present
+            scope = base
+
+        if fn_names:
+            for fn in fn_names:
+                fn_body = extract_function_body(base, fn)
+                if fn_body is not None:
+                    scope, matched_fn = fn_body, fn
+                    break
+            if matched_fn is None:
+                return None  # none of the alternative functions are present
 
         # For CSRF, the "sink" is the state-changing operation.
         # The "safe patch" is the CSRF check.
@@ -493,11 +544,18 @@ class _CSRFDetector(_BaseDetector):
         if not affected:
             return None
 
-        # Find the function declaration line for the finding.
-        fn_line_info = find_pattern_line(
-            source,
-            r"function\s+" + re.escape(fn_name) if fn_name else r"class\s+" + re.escape(class_name),
-            re.IGNORECASE,
+        # Find the function/class declaration line for the finding, using the
+        # alternative that actually matched.
+        label = matched_fn or matched_class
+        if matched_fn:
+            decl_pattern = r"function\s+" + re.escape(matched_fn)
+        elif matched_class:
+            decl_pattern = r"class\s+" + re.escape(matched_class)
+        else:
+            decl_pattern = None
+        fn_line_info = (
+            find_pattern_line(source, decl_pattern, re.IGNORECASE)
+            if decl_pattern else None
         )
         line_no = fn_line_info[0] if fn_line_info else 1
         snippet = fn_line_info[1] if fn_line_info else ""
@@ -512,8 +570,8 @@ class _CSRFDetector(_BaseDetector):
             rel=rel,
             line=line_no,
             snippet=snippet,
-            matched_source=f"function {fn_name or class_name}",
-            matched_sink=f"Missing CSRF check in {fn_name or class_name}",
+            matched_source=f"function {label}" if label else "CSRF-protected operation",
+            matched_sink=f"Missing CSRF check in {label}" if label else "Missing CSRF check",
             missing_patch_evidence=f"Safe patterns not found: {checked}",
             safe_patch_checked=checked,
             version_reasoning=version_reason,
@@ -527,7 +585,7 @@ class _PathTraversalDetector(_BaseDetector):
     """Detect path traversal CVEs (e.g. CVE-2025-67890, CVE-2023-47271)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        scope, bail = self._resolve_function_scope(source, rule.params)
         if bail:
             return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
@@ -541,7 +599,7 @@ class _CodeInjectionDetector(_BaseDetector):
     """
 
     def evaluate(self, rule, rel, source, ojs_version):
-        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        scope, bail = self._resolve_function_scope(source, rule.params)
         if bail:
             return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
@@ -685,7 +743,7 @@ class _HostHeaderDetector(_BaseDetector):
     """Detect Host header injection CVEs (e.g. CVE-2022-26616)."""
 
     def evaluate(self, rule, rel, source, ojs_version):
-        scope, bail = self._function_scope(source, rule.params.get("function_name"))
+        scope, bail = self._resolve_function_scope(source, rule.params)
         if bail:
             return None
         return self._standard_evaluate(rule, rel, source, ojs_version, scope)
@@ -753,13 +811,12 @@ class _DeserializationDetector(_BaseDetector):
             return None
 
         # 2) Determine analysis scope: function → class → full file.
-        #    Support both single function_name and a function_names list.
-        fn_name = params.get("function_name")
-        fn_names: List[str] = list(params.get("function_names", []))
-        if fn_name and fn_name not in fn_names:
-            fn_names.insert(0, fn_name)
-
-        class_name = params.get("class_name")
+        #    function_name(s) and class_name(s) are OR alternatives so the rule
+        #    spans OJS versions that renamed the symbol. Deserialization stays
+        #    lenient: when no named scope matches it falls back to full-file +
+        #    dataflow rather than bailing.
+        fn_names = _collect_scope_names(params, "function_name", "function_names")
+        class_names = _collect_scope_names(params, "class_name", "class_names")
         scope: Optional[str] = None
         scope_label = "full file"
 
@@ -777,17 +834,21 @@ class _DeserializationDetector(_BaseDetector):
                     "CVE %s: none of %s found, trying class/full-file scope",
                     rule.id, fn_names,
                 )
-            if class_name:
-                scope = extract_class_body(source, class_name)
-                if scope:
-                    scope_label = f"class {class_name}"
-                else:
+            for cn in class_names:
+                cb = extract_class_body(source, cn)
+                if cb:
+                    scope = cb
+                    scope_label = f"class {cn}"
+                    logger.debug("CVE %s: using class scope '%s'", rule.id, cn)
+                    break
+            if not scope:
+                if class_names:
                     logger.debug(
-                        "CVE %s: class '%s' not found, falling back to full file",
-                        rule.id, class_name,
+                        "CVE %s: none of classes %s found, falling back to full file",
+                        rule.id, class_names,
                     )
-            else:
-                logger.debug("CVE %s: no function/class scope, using full file", rule.id)
+                else:
+                    logger.debug("CVE %s: no function/class scope, using full file", rule.id)
 
         check_text = scope if scope else source
 

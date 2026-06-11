@@ -1,3 +1,24 @@
+# OJS CVE ruleset — structured, multi-condition source_code rules.
+#
+# A rule fires only when ALL of its conditions hold for a scanned file:
+#   file path · class/function scope · source pattern · sink pattern ·
+#   absence of a safe-patch pattern · affected OJS version range.
+#
+# Multi-alternative (OR) matching — every field below accepts a list of
+# variants and a single match is enough. This keeps one rule accurate across
+# OJS versions that rename files, classes, methods, or variables:
+#   * file_path_patterns  — path regexes      (any one matches the file)
+#   * source_patterns     — source regexes    (any one matches)
+#   * sink_patterns       — sink regexes       (any one matches)
+#   * safe_patch_patterns — fix regexes        (any one ⇒ treated as patched)
+#   * class_name    / class_names    — single name OR list of alternatives
+#   * function_name / function_names — single name OR list of alternatives
+#
+# For class/function scope, "*" (or omitting the key) means "no restriction"
+# (whole-file analysis). When concrete alternative names are listed but none
+# exist in the file, the rule does not fire — the targeted symbol is simply
+# absent in that OJS version.
+
 rules:
 
   # ===== REFLECTED CROSS-SITE SCRIPTING ===================================
