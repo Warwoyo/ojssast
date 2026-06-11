@@ -1,0 +1,37 @@
+# Optional Nginx reverse proxy for ojs-sast (TLS termination + body limits).
+#
+# NOTE on IP allowlisting: the service's own `ip_allowlist` checks the *direct*
+# client IP. Behind a proxy that becomes 127.0.0.1, so when you put Nginx in
+# front, do IP filtering HERE (allow/deny below) and leave `ip_allowlist` empty
+# in service.yml — the app does not trust X-Forwarded-For for auth on purpose.
+#
+# If you instead expose gunicorn directly (host: 0.0.0.0 in service.yml), skip
+# Nginx and keep using `ip_allowlist`.
+
+server {
+    listen 443 ssl http2;
+    server_name sast.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/sast.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sast.example.com/privkey.pem;
+
+    # Must be >= max_upload_bytes in service.yml (200 MB example -> 210m).
+    client_max_body_size 210m;
+
+    # Restrict to the agent VPS (replace with the real address).
+    allow 203.0.113.10;   # <IP_VPS2>
+    deny  all;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Stream large uploads straight through instead of buffering to disk.
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}

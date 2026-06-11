@@ -3,6 +3,13 @@
 Loaded with :func:`yaml.safe_load` into a plain dataclass (no pydantic), so it
 works on the bare install. API keys are stored as **sha256 hashes only** — the
 raw keys are never present in config or logs.
+
+Besides the original intake limits, this also carries the **worker-pool /
+persistent-queue** knobs (concurrency, poll interval, heartbeat + recovery
+timings). Defaults are tuned for a small VPS (≈4 vCPU / 16 GB): the gunicorn
+API workers are configured separately (see ``deploy/gunicorn.conf.py``), while
+``worker_concurrency`` controls threads *per* scan-worker process — production
+typically runs one process per core via the systemd template instead.
 """
 
 from __future__ import annotations
@@ -36,6 +43,22 @@ class ServiceConfig:
     max_active_scans_per_key: int = 3
     audit_log_path: Optional[Path] = None
 
+    # --- worker pool / persistent queue tuning --------------------------- #
+    # Threads per scan-worker process. Keep at 1 and scale processes (systemd
+    # template) for true multi-core parallelism (Python's GIL limits CPU-bound
+    # threads); raise only for I/O-bound experimentation.
+    worker_concurrency: int = 1
+    # How often an idle worker polls the queue for new jobs (seconds).
+    poll_interval_seconds: float = 0.5
+    # A running job refreshes its heartbeat this often (seconds)...
+    heartbeat_interval_seconds: float = 15.0
+    # ...and is considered orphaned (worker died) after this long without one.
+    heartbeat_timeout_seconds: float = 60.0
+    # How often each worker scans for orphaned jobs to recover (seconds).
+    reclaim_interval_seconds: float = 30.0
+    # Max times a job is (re)attempted before recovery gives up and errors it.
+    max_attempts: int = 2
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ServiceConfig":
         data = dict(data or {})
@@ -62,6 +85,14 @@ class ServiceConfig:
             max_file_bytes=int(data.get("max_file_bytes", 50 * 1024 * 1024)),
             max_active_scans_per_key=int(data.get("max_active_scans_per_key", 3)),
             audit_log_path=Path(audit) if audit else None,
+            worker_concurrency=int(data.get("worker_concurrency", 1)),
+            poll_interval_seconds=float(data.get("poll_interval_seconds", 0.5)),
+            heartbeat_interval_seconds=float(
+                data.get("heartbeat_interval_seconds", 15.0)),
+            heartbeat_timeout_seconds=float(
+                data.get("heartbeat_timeout_seconds", 60.0)),
+            reclaim_interval_seconds=float(data.get("reclaim_interval_seconds", 30.0)),
+            max_attempts=int(data.get("max_attempts", 2)),
         )
 
     @classmethod

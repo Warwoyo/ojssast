@@ -81,7 +81,7 @@ def test_worker_uses_scan_options_min_severity(tmp_path, ruleset):
     from ojs_sast.service.worker import Worker
 
     storage = Storage(tmp_path / "data")
-    queue = JobQueue()
+    queue = JobQueue(storage)
     config = ServiceConfig(data_dir=tmp_path / "data")
     worker = Worker(storage, queue, config, ruleset=ruleset)
 
@@ -136,7 +136,7 @@ def test_worker_uses_scan_options_categories(tmp_path, ruleset):
     from ojs_sast.service.worker import Worker
 
     storage = Storage(tmp_path / "data")
-    queue = JobQueue()
+    queue = JobQueue(storage)
     config = ServiceConfig(data_dir=tmp_path / "data")
     worker = Worker(storage, queue, config, ruleset=ruleset)
 
@@ -190,7 +190,7 @@ def test_worker_rejects_invalid_min_severity(tmp_path, ruleset):
     from ojs_sast.service.worker import Worker
 
     storage = Storage(tmp_path / "data")
-    queue = JobQueue()
+    queue = JobQueue(storage)
     config = ServiceConfig(data_dir=tmp_path / "data")
     worker = Worker(storage, queue, config, ruleset=ruleset)
 

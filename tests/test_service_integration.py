@@ -115,7 +115,7 @@ def service_ip_restricted(tmp_path):
     )
     app = create_app(config)
     with TestClient(app) as client:
-        yield client, source, meta
+        yield client, paths
 
 
 def _submit(client, source_path, meta_path, key=API_KEY):
@@ -149,7 +149,8 @@ def test_service_health(service):
 def test_service_rejects_invalid_api_key(service):
     """POST /scan with a wrong or missing API key must return 401."""
     client, paths = service
-    assert _submit(client, paths, key="wrong-key").status_code == 401
+    assert _submit(client, paths.source_archive, paths.meta_json,
+                   key="wrong-key").status_code == 401
     # No header at all.
     with paths.source_archive.open("rb") as src, paths.meta_json.open("rb") as meta:
         resp = client.post(
@@ -164,7 +165,7 @@ def test_service_rejects_ip_not_allowlisted(service_ip_restricted):
     """POST /scan from a non-allowlisted IP must return 403."""
     client, paths = service_ip_restricted
     # TestClient's default client IP is 127.0.0.1 which is not in allowlist 127.0.0.2/32.
-    resp = _submit(client, paths)
+    resp = _submit(client, paths.source_archive, paths.meta_json)
     assert resp.status_code == 403
 
 
@@ -189,8 +190,8 @@ def test_service_rejects_bad_sha256(service, tmp_path):
 
 
 def test_full_scan_lifecycle(service):
-    client, source, meta = service
-    resp = _submit(client, source, meta)
+    client, paths = service
+    resp = _submit(client, paths.source_archive, paths.meta_json)
     assert resp.status_code == 202
     scan_id = resp.json()["scan_id"]
     assert resp.json()["status"] == "queued"
@@ -208,20 +209,20 @@ def test_full_scan_lifecycle(service):
 
 
 def test_status_unknown_scan(service):
-    client, _, _ = service
+    client, _ = service
     resp = client.get("/status/00000000-0000-0000-0000-000000000000",
                       headers={"X-API-Key": API_KEY})
     assert resp.status_code == 404
 
 
 def test_result_before_finished_or_unknown(service):
-    client, _, _ = service
+    client, _ = service
     resp = client.get("/result/does-not-exist", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 404
 
 
 def test_rejects_traversal_archive(service, tmp_path):
-    client, _, _ = service
+    client, _ = service
     bad = tmp_path / "evil.tar.gz"
     with tarfile.open(bad, "w:gz") as tar:
         data = b"hacked"

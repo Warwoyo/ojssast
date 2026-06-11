@@ -96,10 +96,6 @@ audit_log_path: "/var/log/ojs-sast/audit.jsonl"
 
 ## Running the service
 
-```bash
-ojs-sast-service start --config /etc/ojs-sast/service.yml
-```
-
 The service listens on `host:port` and exposes:
 
 | Endpoint | Method | Description |
@@ -109,6 +105,56 @@ The service listens on `host:port` and exposes:
 | `/status/{scan_id}` | GET | Poll scan status |
 | `/result/{scan_id}` | GET | Fetch full result JSON |
 | `/report/{scan_id}/{fmt}` | GET | Download report (json/html/sarif) |
+
+### Development / all-in-one (uvicorn)
+
+```bash
+ojs-sast-service start --config /etc/ojs-sast/service.yml
+```
+
+One process: FastAPI under uvicorn with the scan-worker pool embedded. Simplest
+to run, ideal for local testing — but a single process can't use all cores and a
+restart loses in-flight work.
+
+### Production (gunicorn + worker pool)
+
+For a VPS, run the API under **gunicorn** and the scans in **separate worker
+processes**, both managed by systemd. The API only accepts uploads and enqueues
+jobs; the workers drain a shared, persistent **SQLite-backed queue**, so the two
+are decoupled and jobs survive restarts.
+
+```bash
+# API (process manager) — reads service.yml via OJS_SAST_CONFIG
+OJS_SAST_CONFIG=/etc/ojs-sast/service.yml \
+  gunicorn -c deploy/gunicorn.conf.py ojs_sast.service.asgi:app
+
+# One or more scan workers (run several for parallelism)
+ojs-sast-service worker --config /etc/ojs-sast/service.yml
+```
+
+```
+Agent ─► [Nginx] ─► gunicorn + FastAPI ─► SQLite persistent queue ─► worker pool ─► result/reports
+```
+
+Ready-to-use **systemd units**, a tuned **`gunicorn.conf.py`**, an Nginx example,
+and sizing guidance for a 4 vCPU / 16 GB VPS (4 API workers + 3 scan workers)
+live in [`deploy/`](deploy/README.md). Optional worker/queue knobs in
+`service.yml` (defaults shown):
+
+```yaml
+worker_concurrency: 1          # threads per worker process (scale processes, not threads)
+poll_interval_seconds: 0.5     # how often an idle worker checks the queue
+heartbeat_interval_seconds: 15 # a running job refreshes its heartbeat this often
+heartbeat_timeout_seconds: 60  # ...and is "orphaned" (worker died) after this long
+reclaim_interval_seconds: 30   # how often workers scan for orphaned jobs
+max_attempts: 2                # (re)attempts before recovery gives up and errors a job
+```
+
+**Crash recovery:** running jobs heartbeat periodically; if a worker dies, another
+worker requeues the job (while its source archive is present and `attempts <
+max_attempts`) or marks it `error`. The per-key `max_active_scans_per_key` limit
+is enforced atomically, so concurrent requests across gunicorn workers can't
+exceed it.
 
 ---
 
@@ -214,9 +260,23 @@ ojs_sast/
 │   ├── config_scanner.py  # config.inc.php + Nginx (scan_payload routes nginx: only)
 │   ├── upload_scanner.py  # 5-layer local upload scanner
 │   └── upload_manifest_scanner.py  # same 5 layers from head_hex bytes
-├── service/               # FastAPI app, auth, storage, queue, worker, safe extract
+├── service/               # remote SAST service
+│   ├── app.py             # FastAPI app factory (create_app, run_worker toggle)
+│   ├── asgi.py            # gunicorn ASGI entrypoint (reads OJS_SAST_CONFIG)
+│   ├── cli.py             # start (dev) + worker (production pool) + gen-key
+│   ├── storage.py         # SQLite + filesystem; doubles as the persistent queue
+│   ├── queue.py           # SQLite-backed shared queue (atomic claim)
+│   ├── worker.py          # scan-worker pool: claim, heartbeat, crash recovery
+│   ├── auth.py            # API-key hashing + IP allowlist + audit log
+│   └── extract.py         # safe archive extraction
 ├── ruleset/               # YAML rules + loader
 └── reporters/             # json / html / sarif
+
+deploy/                    # production deployment (gunicorn + systemd)
+├── gunicorn.conf.py       # tuned for the reference 4 vCPU / 16 GB VPS
+├── systemd/               # ojs-sast-api.service + ojs-sast-worker@.service
+├── nginx-ojs-sast.conf.example
+└── README.md              # step-by-step VPS deployment + sizing
 ```
 
 ---

@@ -1,0 +1,30 @@
+[Unit]
+Description=ojs-sast API (gunicorn + uvicorn workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=sastojs
+Group=sastojs
+WorkingDirectory=/opt/ojssast
+Environment=OJS_SAST_CONFIG=/etc/ojs-sast/service.yml
+# Override workers/bind here if desired, e.g.:
+#   Environment=GUNICORN_WORKERS=4
+#   Environment=OJS_SAST_BIND=0.0.0.0:8000
+ExecStart=/opt/ojssast/.venv/bin/gunicorn -c /opt/ojssast/deploy/gunicorn.conf.py ojs_sast.service.asgi:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+# --- hardening --- #
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/ojs-sast /var/log/ojs-sast
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

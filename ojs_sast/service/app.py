@@ -4,6 +4,19 @@ FastAPI is imported (guarded) at module level so endpoint type annotations like
 ``UploadFile`` resolve correctly. Nothing on the core CLI / ``scan-bundle`` path
 imports this module, and the ``ojs-sast-service`` CLI imports it lazily, so a
 bare install (without the ``service`` extra) is unaffected.
+
+Worker topology
+---------------
+``create_app(config, run_worker=True)`` (the default) embeds the scan-worker
+pool in the same process — convenient for development and the all-in-one
+``ojs-sast-service start`` command, and what the tests exercise.
+
+For production behind gunicorn, the ASGI entrypoint
+(:mod:`ojs_sast.service.asgi`) builds the app with ``run_worker=False`` so the
+gunicorn workers only accept HTTP and enqueue jobs into the shared, persistent
+SQLite queue; the scans are run by separate ``ojs-sast-service worker``
+processes. Either way the queue is centralised in the database, so submissions
+are decoupled from execution.
 """
 
 import hashlib
@@ -57,22 +70,30 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def create_app(config: ServiceConfig):
+def create_app(config: ServiceConfig, *, run_worker: bool = True):
+    """Build the FastAPI app.
+
+    :param run_worker: when True (default) the scan-worker pool runs embedded in
+        this process (dev / all-in-one). Set False under gunicorn, where a
+        separate ``ojs-sast-service worker`` process drains the shared queue.
+    """
     if not _FASTAPI_AVAILABLE:
         raise ImportError(_SERVICE_HINT)
 
     storage = Storage(config.data_dir)
-    job_queue = JobQueue()
+    job_queue = JobQueue(storage, poll_interval=config.poll_interval_seconds)
     ruleset = load_ruleset()
-    worker = Worker(storage, job_queue, config, ruleset=ruleset)
+    worker = Worker(storage, job_queue, config, ruleset=ruleset) if run_worker else None
 
     @asynccontextmanager
     async def lifespan(_app):
-        worker.start()
+        if worker is not None:
+            worker.start()
         try:
             yield
         finally:
-            worker.stop()
+            if worker is not None:
+                worker.stop()
 
     app = FastAPI(title="ojs-sast-service", version=__version__, lifespan=lifespan)
     app.state.config = config
@@ -119,11 +140,14 @@ def create_app(config: ServiceConfig):
         _require_auth(request, x_api_key)
         kid = api_key_id(x_api_key)
 
-        if storage.count_active(kid) >= config.max_active_scans_per_key:
+        # Atomic intake: enforce the per-key active limit and reserve the job as
+        # 'receiving' in one transaction, so concurrent requests (across gunicorn
+        # workers) can't both slip past max_active_scans_per_key.
+        scan_id = str(uuid.uuid4())
+        job_dir = storage.try_begin_job(scan_id, kid, config.max_active_scans_per_key)
+        if job_dir is None:
             raise HTTPException(status_code=429, detail="too many active scans for this key")
 
-        scan_id = str(uuid.uuid4())
-        job_dir = storage.create_job(scan_id, kid)
         source_path = job_dir / "source.tar.gz"
         meta_path = job_dir / "meta.json"
 
@@ -145,9 +169,9 @@ def create_app(config: ServiceConfig):
             storage.update(scan_id, status="error", error="rejected at intake")
             raise
 
-        storage.update(scan_id, status="queued",
-                       source_sha256=expected, source_bytes=size)
-        job_queue.put(scan_id)
+        # Promote 'receiving' -> 'queued'; only now is the job claimable by the
+        # worker pool, so a worker never races the in-progress upload.
+        storage.mark_queued(scan_id, source_sha256=expected, source_bytes=size)
         write_audit(config.audit_log_path,
                     {"scan_id": scan_id, "status": "queued",
                      "api_key_id": kid, "ip": _client_ip(request),

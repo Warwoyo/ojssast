@@ -1,0 +1,29 @@
+[Unit]
+Description=ojs-sast scan worker %i
+After=network-online.target ojs-sast-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sastojs
+Group=sastojs
+WorkingDirectory=/opt/ojssast
+Environment=OJS_SAST_CONFIG=/etc/ojs-sast/service.yml
+# Each instance is a separate single-threaded process -> true multi-core
+# parallelism (Python's GIL makes threads a poor fit for CPU-bound scans).
+# Scale with: systemctl enable --now ojs-sast-worker@{1,2,3}
+ExecStart=/opt/ojssast/.venv/bin/ojs-sast-service worker --config /etc/ojs-sast/service.yml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=40
+
+# --- hardening --- #
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/ojs-sast /var/log/ojs-sast
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

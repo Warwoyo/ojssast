@@ -1,17 +1,35 @@
-"""Background job runner for the service.
+"""Background scan-worker pool for the service.
 
-A single daemon thread pops scan ids from the queue, safely extracts the source
-archive into a sandbox, runs ``Orchestrator.run_bundle``, persists the result
-and reports, and then cleans up the sandbox (the extracted tree and the uploaded
-archive) regardless of success or failure.
+Each worker thread pulls a scan id from the **persistent, SQLite-backed queue**
+(:class:`~ojs_sast.service.queue.JobQueue`), safely extracts the source archive
+into a sandbox, runs ``Orchestrator.run_bundle``, persists the result and
+reports, and cleans up the sandbox regardless of success or failure.
+
+This pool is designed to run either:
+
+* embedded in the dev/all-in-one server (``ojs-sast-service start``), or
+* as one or more **separate processes** (``ojs-sast-service worker``), scaled
+  via a systemd template, sharing one queue with the gunicorn API.
+
+Reliability features (vs. the original single in-memory thread):
+
+* **Atomic claim** — :meth:`Storage.claim_next_job` hands a job to exactly one
+  worker, so multiple worker processes never double-run a scan.
+* **Heartbeat** — while a job runs, a side thread refreshes ``heartbeat_at`` so
+  other workers can tell the job is alive.
+* **Recovery** — on start and periodically, :meth:`Storage.reclaim_orphaned`
+  requeues (or fails) jobs whose worker died mid-scan.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import socket
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
@@ -49,38 +67,94 @@ def _generate_reports(result, out_dir: Path) -> Dict[str, Path]:
 
 class Worker:
     def __init__(self, storage: Storage, job_queue: JobQueue, config,
-                 ruleset: Optional[Ruleset] = None):
+                 ruleset: Optional[Ruleset] = None, *,
+                 concurrency: Optional[int] = None,
+                 worker_id: Optional[str] = None):
         self.storage = storage
         self.queue = job_queue
         self.config = config
         self.ruleset = ruleset or load_ruleset()
-        self._thread: Optional[threading.Thread] = None
+
+        self.concurrency = int(
+            concurrency if concurrency is not None
+            else getattr(config, "worker_concurrency", 1)) or 1
+        self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
+        self.poll_interval = float(getattr(config, "poll_interval_seconds", 0.5))
+        self.heartbeat_interval = float(getattr(config, "heartbeat_interval_seconds", 15.0))
+        self.heartbeat_timeout = float(getattr(config, "heartbeat_timeout_seconds", 60.0))
+        self.reclaim_interval = float(getattr(config, "reclaim_interval_seconds", 30.0))
+        self.max_attempts = int(getattr(config, "max_attempts", 2))
+
+        self._threads: list[threading.Thread] = []
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._threads:
             return
-        self._thread = threading.Thread(
-            target=self._loop, name="ojs-sast-worker", daemon=True)
-        self._thread.start()
+        # Requeue jobs orphaned by a previous crash before taking new work.
+        self.recover()
+        for i in range(self.concurrency):
+            t = threading.Thread(
+                target=self._loop, name=f"ojs-sast-worker-{i}",
+                args=(f"{self.worker_id}#{i}",), daemon=True)
+            t.start()
+            self._threads.append(t)
 
     def stop(self) -> None:
         self.queue.stop()
-        if self._thread:
-            self._thread.join(timeout=30)
+        for t in self._threads:
+            t.join(timeout=30)
+        self._threads = []
+
+    def recover(self) -> Dict[str, int]:
+        try:
+            res = self.storage.reclaim_orphaned(self.heartbeat_timeout, self.max_attempts)
+            if res["requeued"] or res["failed"]:
+                logger.info("recovery: requeued=%d failed=%d",
+                            res["requeued"], res["failed"])
+            return res
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("recovery (reclaim_orphaned) failed")
+            return {"requeued": 0, "failed": 0}
 
     # ----------------------------------------------------------------- #
-    def _loop(self) -> None:
-        while True:
-            scan_id = self.queue.get()
-            if scan_id is None:  # shutdown sentinel
-                self.queue.task_done()
-                break
+    def _loop(self, worker_id: str) -> None:
+        next_reclaim = 0.0
+        while not self.queue.stopped():
+            now = time.monotonic()
+            if now >= next_reclaim:
+                self.recover()
+                next_reclaim = now + self.reclaim_interval
+
+            scan_id: Optional[str] = None
             try:
-                self.process_job(scan_id)
-            except Exception:  # pragma: no cover - defensive; process_job handles its own
-                logger.exception("worker crashed processing %s", scan_id)
-            finally:
-                self.queue.task_done()
+                scan_id = self.queue.claim(worker_id)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("claim failed")
+
+            if scan_id is None:
+                self.queue.wait(self.poll_interval)
+                continue
+            self._process_with_heartbeat(scan_id)
+
+    def _process_with_heartbeat(self, scan_id: str) -> None:
+        done = threading.Event()
+
+        def _beat() -> None:
+            while not done.wait(self.heartbeat_interval):
+                try:
+                    self.storage.heartbeat(scan_id)
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("heartbeat failed for %s", scan_id)
+
+        hb = threading.Thread(target=_beat, name=f"hb-{scan_id[:8]}", daemon=True)
+        hb.start()
+        try:
+            self.process_job(scan_id)
+        except Exception:  # pragma: no cover - process_job handles its own errors
+            logger.exception("worker crashed processing %s", scan_id)
+        finally:
+            done.set()
+            hb.join(timeout=5)
 
     def process_job(self, scan_id: str) -> None:
         job_dir = self.storage.job_dir(scan_id)
