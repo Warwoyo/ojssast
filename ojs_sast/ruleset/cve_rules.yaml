@@ -139,7 +139,11 @@ rules:
 
       vulnerability_type: insecure_deserialization
 
-      affected_versions: ["<3.1.2-2"]
+      affected_versions: [">=3.0.0", "<3.1.2-2"]
+      # Lower bound source: PKP issue #5302 explicitly states "Affects OJS 3.x and OMP
+      # installations 3.1.2-1 and older." PKPStatisticsHelper.inc.php and the
+      # unserialize() pattern in the report generator do not exist in OJS 2.x;
+      # that codebase uses a different statistics architecture.
 
       patched_versions: ["3.1.2-2"]
 
@@ -250,7 +254,12 @@ rules:
 
       vulnerability_type: host_header_injection_reflected_xss
 
-      affected_versions: ["<=3.2.1-3", "<=3.3.0-8", "2.x"]
+      affected_versions: [">=2.0.0", "<=3.2.1-3", ">=3.3.0", "<=3.3.0-8"]
+      # Lower bound source: PKP issue #7649 states "This issue affects ALL RELEASES of
+      # OJS, OMP, and OPS versions 3.3.0-8 and older." PKPRequest and host header
+      # resolution via HTTP_HOST/SERVER_NAME/HTTP_X_FORWARDED_HOST is present since
+      # OJS 2.x, confirming >=2.0.0 as the practical lower bound. The original rule
+      # used the informal "2.x" token; this replaces it with an explicit range operator.
 
       patched_versions: ["3.2.1-4", "3.3.0-9"]
 
@@ -351,7 +360,12 @@ rules:
 
       vulnerability_type: csrf
 
-      affected_versions: ["<3.3.0-16"]
+      affected_versions: [">=3.3.0", "<3.3.0-16"]
+      # Lower bound source: classes/subscription/form/PaymentTypesForm.inc.php with the
+      # FormValidatorCSRF framework is specific to the OJS 3.3.x subscription architecture.
+      # This file and the FormValidatorCSRF class do not exist in OJS 2.x or OJS 3.1.x/3.2.x
+      # under this path or class name. Advisory (huntr/PKP commit 99a9f393) states
+      # "< 3.3.0-16" without a lower bound; >=3.3.0 is inferred from file architecture.
 
       patched_versions: ["3.3.0-16"]
 
@@ -543,7 +557,12 @@ rules:
 
       vulnerability_type: stored_xss
 
-      affected_versions: ["<3.3.0-16"]
+      affected_versions: [">=3.3.0", "<3.3.0-16"]
+      # Lower bound source: templates/frontend/pages/submissions.tpl with the
+      # {translate ... name=$section->getLocalizedTitle()} pattern is part of the
+      # OJS 3.3.x frontend theme architecture. OJS 2.x uses a completely different
+      # template system. Advisory (huntr.com) states "< 3.3.0-16" without a lower
+      # bound; >=3.3.0 is inferred from the template file architecture.
 
       patched_versions: ["3.3.0-16"]
 
@@ -637,7 +656,13 @@ rules:
 
       vulnerability_type: path_traversal_arbitrary_file_write_rce
 
-      affected_versions: ["<=3.3.0-15", "<=3.4.0-3"]
+      affected_versions: [">=3.3.0", "<=3.3.0-15", ">=3.4.0", "<=3.4.0-3"]
+      # Lower bound source: PKPNativeFilterHelper.php and NativeXmlPublicationFilter.php
+      # are part of the OJS 3.x Native XML Import/Export plugin architecture.
+      # OJS 2.x uses a completely different import plugin structure; this file and
+      # the parsePublicationCover() function do not exist there. Advisory (KIS-2023-14)
+      # states "<= 3.4.0-3 / before 3.3.0-16" without a lower bound; >=3.3.0 and
+      # >=3.4.0 are inferred from the plugin's introduction in the OJS 3.x codebase.
 
       patched_versions: ["3.3.0-16", "3.4.0-4"]
 
@@ -742,9 +767,17 @@ rules:
 
       vulnerability_type: stored_xss
 
-      affected_versions: ["3.3.0", "3.4.0", "3.5.0"]
+      affected_versions: [">=3.3.0", ">=3.4.0", ">=3.5.0"]
+      # Lower bound source: Advisory (NVD/VulDB/PKP #12022) specifies affected version
+      # families as "3.3.0, 3.4.0, and 3.5.0". The original rule used exact strings
+      # ["3.3.0", "3.4.0", "3.5.0"] which reads as exact-version matches, failing to
+      # cover sub-releases (3.3.0-1, 3.3.0-2, etc.). Corrected to >= range operators.
+      # No patched version has been published as of the advisory date; all sub-releases
+      # within each family are affected. Upper bound intentionally omitted.
 
       patched_versions: []
+      # No fix released as of advisory date (PKP #12022). Remove this note and add
+      # patched_versions when a fix is confirmed.
 
       file_path_patterns:
 
@@ -832,7 +865,13 @@ rules:
 
       vulnerability_type: sqli
 
-      affected_versions: ["<=3.4.0-9", "<=3.5.0-1"]
+      affected_versions: [">=3.4.0", "<=3.4.0-9", ">=3.5.0", "<=3.5.0-1"]
+      # Lower bound source: GROUND TRUTH (ojs_cve_sast_final.json) EXPLICITLY STATES:
+      # "the affected query-builder code does not exist in 3.3.0". The Institution
+      # module (classes/institution/Collector.php) with the Laravel Eloquent DB::raw()
+      # query builder was introduced in OJS 3.4.0. Advisory KIS-2025-10 confirms:
+      # "PKP-WAL version 3.4.0-9 and prior versions, and version 3.5.0-1 and prior."
+      # OJS 3.3.x and below do not have this file; lower bound is architecturally certain.
 
       patched_versions: ["3.4.0-10", "3.5.0-2"]
 
@@ -937,7 +976,12 @@ rules:
 
       vulnerability_type: path_traversal_arbitrary_file_write
 
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+      affected_versions: [">=3.3.0", "<=3.3.0-21", ">=3.4.0", "<=3.4.0-9", ">=3.5.0", "<=3.5.0-1"]
+      # Lower bound source: NativeXmlIssueGalleyFilter.php is part of the OJS 3.x Native
+      # XML Import/Export plugin architecture. This file and the handleElement() method
+      # processing the file_name XML element do not exist in OJS 2.x. Advisory KIS-2025-11
+      # states "<= 3.3.0-21, <= 3.4.0-9, <= 3.5.0-1" without lower bounds; >=3.3.0,
+      # >=3.4.0, >=3.5.0 are inferred from the file's introduction in each OJS major branch.
 
       patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
 
@@ -1031,7 +1075,13 @@ rules:
 
       vulnerability_type: less_code_injection
 
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+      affected_versions: [">=3.3.0", "<=3.3.0-21", ">=3.4.0", "<=3.4.0-9", ">=3.5.0", "<=3.5.0-1"]
+      # Lower bound source: DefaultThemePlugin.inc.php/.php and the $additionalLessVariables
+      # LESS compilation pipeline are specific to OJS 3.x. The default theme with LESS
+      # support does not exist in OJS 2.x. Advisory KIS-2025-12 states "PKP-WAL version
+      # 3.4.0-9 and prior versions, and version 3.5.0-1 and prior"; GT notes that PKP
+      # also released 3.3.0-22 with the same fix (issue #11974), confirming 3.3.x is
+      # affected from >=3.3.0. Lower bounds inferred from OJS 3.x theme architecture.
 
       patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
 
@@ -1221,7 +1271,13 @@ rules:
 
       vulnerability_type: csrf
 
-      affected_versions: ["<=3.3.0-21", "<=3.4.0-9", "<=3.5.0-1"]
+      affected_versions: [">=3.3.0", "<=3.3.0-21", ">=3.4.0", "<=3.4.0-9", ">=3.5.0", "<=3.5.0-1"]
+      # Lower bound source: classes/security/Validation.inc.php (3.3.x) and
+      # classes/security/Validation.php (3.4.x, 3.5.x) with the $request->checkCSRF()
+      # framework are specific to OJS 3.x. OJS 2.x uses a completely different
+      # authentication and session management architecture. Advisory KIS-2025-14 states
+      # "<= 3.3.0-21, <= 3.4.0-9, <= 3.5.0-1" without lower bounds; >=3.3.0, >=3.4.0,
+      # >=3.5.0 are inferred from the Validation class structure in each OJS major branch.
 
       patched_versions: ["3.3.0-22", "3.4.0-10", "3.5.0-2"]
 
